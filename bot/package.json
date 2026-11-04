@@ -1,0 +1,16 @@
+{
+  "name": "ninja-horizon-afk-bot",
+  "version": "1.0.0",
+  "description": "Headless AFK EXP Bot (Metode A) untuk Ninja Horizon menggunakan bytecode asli mesin Oracle (Hermes v98)",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js",
+    "login": "node bot.js --login-google",
+    "test": "node bot.js --test-sim",
+    "status": "node bot.js --status",
+    "missions": "node bot.js --list-missions"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

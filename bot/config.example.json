@@ -1,0 +1,16 @@
+{
+  "email": "",
+  "password": "",
+  "refreshToken": "",
+  "accessToken": "",
+  "missionId": "auto",
+  "autoPlan": true,
+  "minDelaySeconds": 8,
+  "maxDelaySeconds": 15,
+  "betweenMissionMinSeconds": 4,
+  "betweenMissionMaxSeconds": 9,
+  "stopOnSoftCap": true,
+  "maxRuns": 0,
+  "maxWinsPerDay": 0
+}
+

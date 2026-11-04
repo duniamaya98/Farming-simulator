@@ -1,0 +1,23 @@
+# ==== Kredensial & data pribadi (JANGAN PERNAH di-commit) ====
+bot/session.json
+bot/config.json
+bot/daily.json
+*.env
+.env*
+
+# ==== File proprietary milik game (ekstrak sendiri dari APK) ====
+*.apk
+*.aab
+*.bundle
+*.hbc
+bot/oracle_bytecode.bin
+bot/oracle_meta.json
+bot/legacy_apk_engines/
+Docs/lampiran/
+
+# ==== Lain-lain ====
+node_modules/
+scratch/
+*.log
+.DS_Store
+Thumbs.db
