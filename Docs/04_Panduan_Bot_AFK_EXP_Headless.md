@@ -261,3 +261,55 @@ node bot.js --event
 # Serang event boss spesifik sebanyak 3 ronde
 node bot.js --event --boss-id evt_boss_1 --runs 3
 ```
+
+
+### 7.3 Mekanisme Auto Hunting House (Kari Badges)
+Hunting House merupakan dungeon permanen pemburu monster (`venue: "hunting"`):
+- **Syarat Level**: Minimal **Level 10** (`feature_gates.hunting: 10`). Server melempar `PTLOCK:hunting:10` jika karakter belum mencapai Lv 10.
+- **Mata Uang Entry**: Menggunakan **Kari Badge** (`item_509`). Biaya masuk standar 5 Kari Badges, menang mengembalikan 1 Badge (`game_config.kari_badge_economy`). Pemain mendapatkan 10 Badges gratis setiap hari.
+- **Pemilihan Room Otomatis (`--hunting`)**: Bot otomatis memilih monster dengan rank dan hadiah tertinggi yang memenuhi syarat level karakter (`encounter_level <= avatar.level`):
+  - Lv 10: *Hunter's Forest* (`hunt_ginkotsu`)
+  - Lv 20: *Third Laboratory* (`hunt_yanki`)
+  - Lv 25: *Sealing Stone Vault* (`hunt_gedo`)
+  - Lv 30: *Tengu Roost* (`hunt_tengu`)
+  - Lv 40: *Byakko's Den* (`hunt_byakko`)
+  - Lv 50: *Ape Mountain* (`hunt_apeking`)
+  - Lv 55: *Northern Shoals* (`hunt_turtle`)
+  - Lv 60: *Samu Village Ruins* (`hunt_mutoh`)
+
+**Contoh Perintah Hunting House:**
+```powershell
+# Cek saldo Kari Badge dan daftar room yang terbuka
+node bot.js --hunt-status
+
+# Farming otomatis room tertinggi sesuai level
+node bot.js --hunting
+
+# Farming room spesifik sebanyak 5 ronde
+node bot.js --hunting --room hunt_ginkotsu --runs 5
+```
+
+### 7.4 Mekanisme Auto Eudemon Garden (Taman Makhluk Mistis)
+Eudemon Garden merupakan pertarungan tingkat lanjut (`venue: "eudemon"`):
+- **Hadiah**: Memberikan EXP sangat tinggi (20.000 s.d 75.000 XP per pertarungan) dan material senjata khusus untuk *Garden Forge*.
+- **Syarat Level**: Minimal **Level 10** (`encounter_level` berkisar antara Lv 10 hingga Lv 80).
+- **Pemilihan Room Otomatis (`--eudemon`)**: Bot otomatis mencocokkan level karakter ke room terbaik:
+  - Lv 10: *Kamaitachi Garden* (`eudemon_kamaitachi` - 20k XP)
+  - Lv 20: *Hell Horse Garden* (`eudemon_hell_horse` - 23k XP)
+  - Lv 25: *Kabutomushi Musha Garden* (`eudemon_kabutomushi` - 25k XP)
+  - Lv 30: *Kinkaku & Ginkaku Garden* (`eudemon_kinkaku_ginkaku` - 30k XP)
+  - Lv 40: *Thunder Eagle Garden* (`eudemon_thunder_eagle` - 35k XP)
+  - Lv 50: *Mammoth King Garden* (`eudemon_mammoth_king` - 38k XP)
+  - Lv 55: *Oceans Queen Garden* (`eudemon_oceans_queen` - 40k XP)
+  - Lv 60: *Ghost Soldier Garden* (`eudemon_ghost_soldier` - 48k XP)
+  - Lv 70: *Battle Angel Garden* (`eudemon_battle_angel` - 56k XP)
+  - Lv 80: *Infernal Chimera Garden* (`eudemon_infernal_chimera` - 75k XP)
+
+**Contoh Perintah Eudemon Garden:**
+```powershell
+# Farming otomatis room Eudemon Garden terbaik
+node bot.js --eudemon
+
+# Farming room spesifik sebanyak 3 ronde
+node bot.js --eudemon --room eudemon_kamaitachi --runs 3
+```

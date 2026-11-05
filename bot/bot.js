@@ -812,6 +812,61 @@ async function showWorldBossStatus(client) {
   }
 }
 
+async function showHuntingStatus(client) {
+  logInfo('Mengambil status Hunting House, Eudemon Garden, & Kari Badge dari server...');
+  try {
+    const avatar = await client.fetchAvatar().catch(() => null);
+    const [huntState, huntCatalog, econCfg] = await Promise.all([
+      client.fetchHuntingPlayerState().catch((e) => ({ error: e.message })),
+      client.fetchHuntingCatalog().catch((e) => ({ error: e.message })),
+      client.gameConfig(['kari_badge_economy']).catch((e) => ({ error: e.message })),
+    ]);
+
+    const charLevel = Number(avatar?.level || 1);
+    console.log('\n=== Status Kari Badge (Hunting House) ===');
+    const kari = huntState?.kari;
+    const econ = econCfg?.kari_badge_economy;
+    if (kari && !huntState.error) {
+      logInfo(`Saldo Kari Badge  : ${kari.balance ?? 0}`);
+      logInfo(`Biaya Masuk / Run : ${kari.entry_cost ?? econ?.entry_cost ?? 5} Badges`);
+      logInfo(`Hadiah Menang     : ${kari.win_return ?? econ?.win_return ?? 1} Badge kembali`);
+    } else {
+      logInfo(`Kari Badge Economy: Masuk ${econ?.entry_cost ?? 5} Badges, Gratis harian ${econ?.daily_free ?? 10} Badges`);
+      if (huntState?.error) logWarn(`Info pemain: ${huntState.error}`);
+    }
+
+    const defs = huntCatalog?.definitions || [];
+    const huntRooms = defs.filter((d) => d.venue === 'hunting').sort((a, b) => (a.encounter_level || 0) - (b.encounter_level || 0));
+    const eudemonRooms = defs.filter((d) => d.venue === 'eudemon').sort((a, b) => (a.encounter_level || 0) - (b.encounter_level || 0));
+
+    console.log('\n=== Room Hunting House (Karakter Level ' + charLevel + ') ===');
+    console.table(
+      huntRooms.map((r) => ({
+        RoomID: r.id,
+        Name: r.name,
+        LevelReq: r.encounter_level,
+        Status: charLevel >= Number(r.encounter_level) ? 'TERBUKA' : 'TERKUNCI',
+        XP: Number(r.xp || 0).toLocaleString('id-ID'),
+        Gold: Number(r.gold || 0).toLocaleString('id-ID'),
+      }))
+    );
+
+    console.log('\n=== Room Eudemon Garden (Karakter Level ' + charLevel + ') ===');
+    console.table(
+      eudemonRooms.map((r) => ({
+        RoomID: r.id,
+        Name: r.name,
+        LevelReq: r.encounter_level,
+        Status: charLevel >= Number(r.encounter_level) ? 'TERBUKA' : 'TERKUNCI',
+        XP: Number(r.xp || 0).toLocaleString('id-ID'),
+        Gold: Number(r.gold || 0).toLocaleString('id-ID'),
+      }))
+    );
+  } catch (err) {
+    logError(`Gagal mengambil status hunting: ${err.message}`);
+  }
+}
+
 async function listBosses(client) {
   logInfo('Mengambil katalog bos Event & Hunting House dari server...');
   try {
@@ -1321,10 +1376,24 @@ async function runWorldBossBot(client, config, cliOptions) {
 }
 
 // ============================================================================
-// Loop Farming Event Boss & Hunting House
+// Loop Farming Hunting House, Eudemon Garden, & Event Boss
 // ============================================================================
-async function runEventBossBot(client, config, cliOptions, mode = 'event') {
-  const isHuntingMode = mode === 'hunting';
+async function runHuntBot(client, config, cliOptions, mode = 'hunting') {
+  const modeKey = String(mode).toLowerCase();
+  const isHunting = modeKey === 'hunting' || modeKey === 'hunt';
+  const isEudemon = modeKey === 'eudemon' || modeKey === 'garden';
+  const isEvent = modeKey === 'event' || modeKey === 'event_boss';
+
+  let modeTitle = 'HUNTING HOUSE';
+  let runPrefix = 'Hunt';
+  if (isEudemon) {
+    modeTitle = 'EUDEMON GARDEN';
+    runPrefix = 'Eudemon';
+  } else if (isEvent) {
+    modeTitle = 'EVENT BOSS';
+    runPrefix = 'EventBoss';
+  }
+
   const minDelaySec = Number(config.minDelaySeconds ?? 8);
   const maxDelaySec = Number(config.maxDelaySeconds ?? 15);
   const cooldownMinSec = Number(config.betweenMissionMinSeconds ?? 4);
@@ -1356,7 +1425,7 @@ async function runEventBossBot(client, config, cliOptions, mode = 'event') {
   if (charLevel < 10) {
     logError('============================================================');
     logError(`KESALAHAN: Level karakter (${charLevel}) belum mencukupi!`);
-    logError('Fitur Hunting House & Event Boss mensyaratkan minimal Level 10 (PTLOCK:hunting:10).');
+    logError(`Fitur ${modeTitle} mensyaratkan minimal Level 10 (PTLOCK:hunting:10).`);
     logError('Silakan naikkan level karakter Anda terlebih dahulu menggunakan farming misi:');
     logError('  node bot.js --runs 10');
     logError('============================================================');
@@ -1366,20 +1435,18 @@ async function runEventBossBot(client, config, cliOptions, mode = 'event') {
   const tacticalPlan = autoPlan && avatar?.auto_plan && typeof avatar.auto_plan === 'object' ? avatar.auto_plan : null;
 
   logInfo('============================================================');
-  logInfo(`NINJA HORIZON — FARMING ${isHuntingMode ? 'HUNTING HOUSE' : 'EVENT BOSS'} (HEADLESS BOT)`);
+  logInfo(`NINJA HORIZON — FARMING ${modeTitle} (HEADLESS BOT)`);
   logInfo('============================================================');
   logInfo(`Karakter           : ${avatar.name} (Lv ${avatar.level}, ${avatar.rank})`);
 
+  // Pemilihan otomatis (Mode "auto")
   if (String(targetBossId).toLowerCase() === 'auto') {
-    if (!isHuntingMode) {
-      const [eventsState, catalog] = await Promise.all([
-        client.fetchEventsSurfaceState().catch(() => null),
-        client.fetchHuntingCatalog().catch(() => null),
-      ]);
-      const definitions = catalog?.definitions || [];
-      const defMap = new Map(definitions.map((d) => [d.id, d]));
+    const catalog = await client.fetchHuntingCatalog().catch(() => null);
+    const definitions = catalog?.definitions || [];
+    const defMap = new Map(definitions.map((d) => [d.id, d]));
 
-      // Filter event bosses (exclude world boss vadar/yudai)
+    if (isEvent) {
+      const eventsState = await client.fetchEventsSurfaceState().catch(() => null);
       const rawBosses = eventsState?.bosses || [];
       const eventBosses = rawBosses.filter((b) => {
         const id = b.id || b.room_id || '';
@@ -1407,29 +1474,56 @@ async function runEventBossBot(client, config, cliOptions, mode = 'event') {
       targetBossId = chosen.id;
       const chosenDef = defMap.get(chosen.id);
       logInfo(`Mode "auto": memilih Event Boss "${chosenDef?.name || chosen.name || targetBossId}" (Room: ${targetBossId}, Lv ${chosen.level ?? 10})`);
-    } else {
-      const catalog = await client.fetchHuntingCatalog().catch(() => null);
-      const rooms = (catalog?.definitions || []).filter((r) => r.venue === 'hunting');
-      if (!rooms.length) {
-        logWarn('Tidak ada room hunting yang ditemukan.');
+    } else if (isEudemon) {
+      const eudemonRooms = definitions
+        .filter((r) => r.venue === 'eudemon')
+        .sort((a, b) => Number(a.encounter_level || a.level || 0) - Number(b.encounter_level || b.level || 0));
+
+      if (!eudemonRooms.length) {
+        logWarn('Tidak ada room Eudemon Garden yang ditemukan di katalog.');
         return;
       }
-      const eligible = rooms.filter((r) => Number(r.encounter_level || r.level || 10) <= charLevel);
-      const chosen = eligible.length ? eligible[eligible.length - 1] : rooms[0];
+
+      const eligible = eudemonRooms.filter((r) => Number(r.encounter_level || r.level || 10) <= charLevel);
+      if (!eligible.length) {
+        logWarn(`Level karakter Anda (Lv ${charLevel}) belum cukup untuk membuka room Eudemon Garden manapun (minimal Lv 10).`);
+        return;
+      }
+      const chosen = eligible[eligible.length - 1];
       targetBossId = chosen.id;
-      logInfo(`Mode "auto": memilih Hunting Boss "${chosen.name || targetBossId}" (Room: ${targetBossId}, Lv ${chosen.encounter_level || chosen.level})`);
+      logInfo(`Mode "auto": memilih Eudemon Garden "${chosen.name}" (Room: ${targetBossId}, Lv ${chosen.encounter_level || chosen.level}, XP: ${Number(chosen.xp || 0).toLocaleString('id-ID')})`);
+    } else {
+      // Hunting House
+      const huntRooms = definitions
+        .filter((r) => r.venue === 'hunting')
+        .sort((a, b) => Number(a.encounter_level || a.level || 0) - Number(b.encounter_level || b.level || 0));
+
+      if (!huntRooms.length) {
+        logWarn('Tidak ada room Hunting House yang ditemukan di katalog.');
+        return;
+      }
+
+      const eligible = huntRooms.filter((r) => Number(r.encounter_level || r.level || 10) <= charLevel);
+      if (!eligible.length) {
+        logWarn(`Level karakter Anda (Lv ${charLevel}) belum cukup untuk membuka room Hunting House manapun (minimal Lv 10).`);
+        return;
+      }
+      const chosen = eligible[eligible.length - 1];
+      targetBossId = chosen.id;
+      logInfo(`Mode "auto": memilih Hunting House "${chosen.name}" (Room: ${targetBossId}, Lv ${chosen.encounter_level || chosen.level}, XP: ${Number(chosen.xp || 0).toLocaleString('id-ID')})`);
     }
   }
 
   logInfo(`Target Room/Boss ID: ${targetBossId}`);
-  logInfo(`Mode Pertarungan   : ${isHuntingMode ? 'Hunting House' : 'Event Boss'}`);
+  logInfo(`Mode Pertarungan   : ${modeTitle}`);
   logInfo('------------------------------------------------------------');
 
   let totalRuns = 0;
   let totalWins = 0;
 
   while (maxRuns <= 0 || totalRuns < maxRuns) {
-    if (!isHuntingMode) {
+    // 1. Cek Stamina jika mode Event
+    if (isEvent) {
       const stam = await client.fetchEventStamina().catch(() => null);
       if (stam && (stam.stamina != null || stam.current != null)) {
         const cur = Number(stam.stamina ?? stam.current);
@@ -1448,8 +1542,22 @@ async function runEventBossBot(client, config, cliOptions, mode = 'event') {
       }
     }
 
+    // 2. Cek Saldo Kari Badge jika mode Hunting House
+    if (isHunting) {
+      const huntState = await client.fetchHuntingPlayerState().catch(() => null);
+      if (huntState?.kari) {
+        const balance = Number(huntState.kari.balance ?? 0);
+        const cost = Number(huntState.kari.entry_cost ?? 5);
+        logInfo(`Kari Badge saat ini: ${balance} (Biaya masuk: ${cost} badges)`);
+        if (balance < cost) {
+          logWarn(`Kari Badge tidak mencukupi (${balance} < ${cost}). Berhenti farming Hunting House.`);
+          break;
+        }
+      }
+    }
+
     totalRuns++;
-    const runLabel = `${isHuntingMode ? 'Hunt' : 'EventBoss'} #${totalRuns}`;
+    const runLabel = `${runPrefix} #${totalRuns}`;
     logInfo(`--- [${runLabel}] Menantang room "${targetBossId}"... ---`);
 
     try {
@@ -1468,7 +1576,7 @@ async function runEventBossBot(client, config, cliOptions, mode = 'event') {
         const items = grant.items || grant.drops || grant.reward_items || [];
         let itemsStr = '';
         if (Array.isArray(items) && items.length) {
-          itemsStr = ` | Drops: ${items.map((it) => (typeof it === 'object' ? `${it.id} x${it.qty || 1}` : it)).join(', ')}`;
+          itemsStr = ` | Drops: ${items.map((it) => (typeof it === 'object' ? `${it.id || it.item} x${it.qty || 1}` : it)).join(', ')}`;
         }
         logSuccess(
           `[${runLabel}] MENANG! +${Number(xp).toLocaleString('id-ID')} XP` +
@@ -1491,7 +1599,7 @@ async function runEventBossBot(client, config, cliOptions, mode = 'event') {
     }
   }
 
-  logSuccess(`Selesai farming! Total run: ${totalRuns}, Menang: ${totalWins}`);
+  logSuccess(`Selesai farming ${modeTitle}! Total run: ${totalRuns}, Menang: ${totalWins}`);
 }
 
 
@@ -1508,6 +1616,8 @@ function parseArgs(argv) {
     worldBoss: false,
     eventBoss: false,
     hunting: false,
+    eudemon: false,
+    huntStatus: false,
     loginGoogle: false,
     callbackUrl: null,
     missionId: null,
@@ -1541,6 +1651,11 @@ function parseArgs(argv) {
     } else if (arg === '--hunting' || arg === '--hunt') {
       opts.hunting = true;
       opts.mode = 'hunting';
+    } else if (arg === '--eudemon' || arg === '--garden') {
+      opts.eudemon = true;
+      opts.mode = 'eudemon';
+    } else if (arg === '--hunt-status' || arg === '--hunting-status') {
+      opts.huntStatus = true;
     } else if (arg === '--login-google' || arg === '--login') {
       opts.loginGoogle = true;
       if (argv[i + 1] && !argv[i + 1].startsWith('--')) {
@@ -1548,7 +1663,7 @@ function parseArgs(argv) {
       }
     } else if (arg === '--mission' && argv[i + 1]) {
       opts.missionId = argv[++i];
-    } else if (arg === '--boss' && argv[i + 1]) {
+    } else if ((arg === '--boss' || arg === '--room') && argv[i + 1]) {
       opts.bossId = argv[++i];
     } else if (arg === '--runs' && argv[i + 1]) {
       opts.maxRuns = Number(argv[++i]);
@@ -1603,11 +1718,13 @@ Farming World Boss:
   --auto-claim             Klaim milestone World Boss yang tercapai secara otomatis
   --auto-refill            Beli refill tiket World Boss menggunakan token jika habis
 
-Farming Event Boss & Hunting:
-  --list-bosses, --bosses  Tampilkan katalog Event Boss & Hunting House
-  --event, --event-boss    Jalankan bot mode Event Boss
-  --hunting, --hunt        Jalankan bot mode Hunting House permanen
-  --boss <id>              Tentukan ID bos / room (default: rekomendasi otomatis)
+Farming Hunting House, Eudemon Garden, & Event Boss:
+  --list-bosses, --bosses  Tampilkan katalog Event Boss, Hunting House, & Eudemon Garden
+  --hunt-status            Tampilkan saldo Kari Badge & daftar room terbuka
+  --hunting, --hunt        Jalankan farming otomatis Hunting House (Kari Badge)
+  --eudemon, --garden      Jalankan farming otomatis Eudemon Garden (EXP Tinggi & Senjata Forge)
+  --event, --event-boss    Jalankan farming otomatis Event Boss (Event Stamina)
+  --boss <id>, --room <id> Tentukan ID bos / room tertentu (default: auto rekomendasi)
 `);
     return;
   }
@@ -1645,20 +1762,28 @@ Farming Event Boss & Hunting:
     return;
   }
 
+  if (cliOptions.huntStatus) {
+    await showHuntingStatus(client);
+    return;
+  }
+
   const selectedMode =
     cliOptions.mode ||
     (cliOptions.worldBoss ? 'wb' : null) ||
     (cliOptions.eventBoss ? 'event' : null) ||
     (cliOptions.hunting ? 'hunting' : null) ||
+    (cliOptions.eudemon ? 'eudemon' : null) ||
     config.mode ||
     'mission';
 
   if (selectedMode === 'wb' || selectedMode === 'world_boss') {
     await runWorldBossBot(client, config, cliOptions);
   } else if (selectedMode === 'event' || selectedMode === 'event_boss') {
-    await runEventBossBot(client, config, cliOptions, 'event');
-  } else if (selectedMode === 'hunting') {
-    await runEventBossBot(client, config, cliOptions, 'hunting');
+    await runHuntBot(client, config, cliOptions, 'event');
+  } else if (selectedMode === 'hunting' || selectedMode === 'hunt') {
+    await runHuntBot(client, config, cliOptions, 'hunting');
+  } else if (selectedMode === 'eudemon' || selectedMode === 'garden') {
+    await runHuntBot(client, config, cliOptions, 'eudemon');
   } else {
     await runAfkBot(client, config, cliOptions);
   }
