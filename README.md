@@ -53,4 +53,12 @@ node bot.js --eudemon --room eudemon_kamaitachi  # farming room spesifik
 node bot.js --list-bosses    # lihat katalog lengkap event & hunting
 node bot.js --event          # serang event boss aktif (mis. Pumpkin Graveyard)
 node bot.js --event --runs 5 # serang event boss 5 ronde
+
+# 6. Auto-Climb Shinobi Tower (Tower of Trials — Minimal Lv 10)
+node bot.js --tower-status   # cek rekor lantai saat ini, rank mingguan, & sweep
+node bot.js --tower          # auto-climb: daki lantai demi lantai secara berurutan
+node bot.js --tower --max-floors 5     # batasi pendakian maksimal 5 lantai
+node bot.js --tower --target-floor 80  # berhenti setelah mencapai lantai target
+node bot.js --tower-sweep    # klaim instan hadiah sweep jika tersedia
+node bot.js --tower --auto-sweep       # otomatis lakukan sweep sebelum mulai memanjat
 ```

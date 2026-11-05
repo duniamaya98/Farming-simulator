@@ -313,3 +313,48 @@ node bot.js --eudemon
 # Farming room spesifik sebanyak 3 ronde
 node bot.js --eudemon --room eudemon_kamaitachi --runs 3
 ```
+
+---
+
+## 8. Mode Shinobi Tower (Tower of Trials)
+
+Shinobi Tower adalah mode panjat menara mingguan tanpa batas (*infinite climb*) di mana setiap 5 lantai dijaga oleh musuh elit dan setiap 10 lantai dijaga oleh bos penjaga menara.
+
+### 8.1 Mekanisme & Protokol RPC Shinobi Tower
+Dari hasil reverse engineering bundle Hermes (modul `useTower`, FID `809`, FID `9212`, FID `22907`):
+- **`tower_state`**: Mengambil status menara pemain saat ini, termasuk `record_floor`, `best_floor`, `week_id`, `rank`, `sweep`, dan daftar `milestones`.
+- **`tower_start`**: Memulai pertarungan menara dengan parameter `{ p_week_id, p_floor }`. Mengembalikan sesi pertarungan yang dieksekusi menggunakan mesin Oracle Edge Function (`/functions/v1/resolve-battle`).
+- **`tower_sweep`**: Menyapu lantai instan dengan parameter `{ p_week_id }` hingga target sweep minggu lalu (`sweep.target`).
+- **`tower_rankings`**: Mengambil peringkat mingguan pemain global (`p_week_id`, `p_page`, `p_page_size`).
+- **Syarat Fitur**: Karakter minimal **Level 10** (`feature_gates.tower: 10`).
+
+### 8.2 Fitur Auto-Climb & Auto-Sweep Bot
+Bot menyediakan otomatisasi pendakian bertahap:
+1. **Pendeteksian Lantai Otomatis**: Bot mendeteksi posisi `record_floor` akun dan langsung menantang lantai berikutnya (`record_floor + 1`).
+2. **Pacing Realistis**: Mengikuti ritme pertempuran asli (700–950 ms per turn) agar terhindar dari deteksi bot atau timeout.
+3. **Pemberhentian Cerdas**: Bot otomatis berhenti jika:
+   - Mengalami kekalahan pada lantai yang sulit.
+   - Telah mencapai target lantai (`--target-floor <lantai>`).
+   - Telah menyelesaikan kuota pendakian (`--max-floors <jumlah>`).
+4. **Auto-Sweep**: Menjalankan sweep instan sebelum pendakian dimulai jika opsi `--auto-sweep` disertakan.
+
+### 8.3 Contoh Perintah Penggunaan Shinobi Tower
+```powershell
+# 1. Cek status rekor lantai, rank mingguan, dan lawan lantai berikutnya
+node bot.js --tower-status
+
+# 2. Daki menara secara otomatis lantai demi lantai tanpa batas (sampai kalah)
+node bot.js --tower
+
+# 3. Daki menara dengan target berhenti di lantai tertentu (mis. lantai 80)
+node bot.js --tower --target-floor 80
+
+# 4. Batasi pendakian maksimal 5 lantai dalam satu sesi
+node bot.js --tower --max-floors 5
+
+# 5. Jalankan sweep hadiah instan jika tersedia
+node bot.js --tower-sweep
+
+# 6. Jalankan sweep terlebih dahulu kemudian lanjutkan auto-climb
+node bot.js --tower --auto-sweep
+```

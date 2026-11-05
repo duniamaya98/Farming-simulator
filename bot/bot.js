@@ -465,6 +465,31 @@ class NinjaHorizonClient {
     });
   }
 
+  async fetchTowerState() {
+    return await this.rpc('tower_state');
+  }
+
+  async startTower(weekId, floor) {
+    return await this.rpc('tower_start', {
+      p_week_id: weekId,
+      p_floor: floor,
+    });
+  }
+
+  async sweepTower(weekId) {
+    return await this.rpc('tower_sweep', {
+      p_week_id: weekId,
+    });
+  }
+
+  async fetchTowerRankings(weekId, page = 1, pageSize = 20) {
+    return await this.rpc('tower_rankings', {
+      p_week_id: weekId,
+      p_page: page,
+      p_page_size: pageSize,
+    });
+  }
+
   /**
    * Mengambil build awal pertarungan dari `/functions/v1/resolve-battle` (`mode: "start"`).
    */
@@ -1602,6 +1627,185 @@ async function runHuntBot(client, config, cliOptions, mode = 'hunting') {
   logSuccess(`Selesai farming ${modeTitle}! Total run: ${totalRuns}, Menang: ${totalWins}`);
 }
 
+// ============================================================================
+// Mode Shinobi Tower (Tower of Trials)
+// ============================================================================
+async function showTowerStatus(client) {
+  logInfo('Mengambil status Shinobi Tower dari server...');
+  const avatar = await client.fetchAvatar().catch(() => null);
+  const state = await client.fetchTowerState();
+
+  console.log('\n============================================================');
+  console.log('STATUS SHINOBI TOWER (TOWER OF TRIALS)');
+  console.log('============================================================');
+
+  if (avatar?.name) {
+    console.log(`Karakter         : ${avatar.name} (Lv ${avatar.level || '?'}, ${avatar.rank || 'ninja'})`);
+  }
+  console.log(`Minggu Aktif     : ${state.week_id}`);
+  if (state.ends_at) {
+    console.log(`Batas Mingguan   : ${new Date(state.ends_at).toLocaleString('id-ID')}`);
+  }
+  console.log(`Lantai Tertinggi : Lantai ${state.record_floor ?? 0} (Best: Lantai ${state.best_floor ?? 0})`);
+  console.log(`Lantai Berikutnya: Lantai ${(state.record_floor ?? 0) + 1}`);
+  console.log(`Peringkat Anda   : #${state.rank ?? '-'} (Top Server Minggu Ini: Lantai ${state.week_top_floor ?? '-'})`);
+
+  console.log('\n=== Status Sweep ===');
+  const sw = state.sweep || {};
+  console.log(`Target Sweep     : Lantai ${sw.target ?? '-'}`);
+  console.log(`Tersedia         : ${sw.available ? 'YA (Dapat di-sweep sekarang!)' : 'TIDAK (Sudah di-sweep / belum memenuhi)'}`);
+  console.log(`Rekor Minggu Lalu: Lantai ${sw.last_week_best ?? '-'}`);
+
+  if (Array.isArray(state.milestones) && state.milestones.length) {
+    console.log('\n=== Hadiah Milestone Terdekat ===');
+    const upcoming = state.milestones.filter((m) => !m.claimed && m.floor > (state.record_floor ?? 0)).slice(0, 5);
+    if (upcoming.length) {
+      upcoming.forEach((m) => {
+        const rewStr = Object.entries(m.rewards || {})
+          .map(([k, v]) => `${k}: +${v}`)
+          .join(', ');
+        console.log(`- Lantai ${m.floor.toString().padStart(3, ' ')} : ${rewStr}`);
+      });
+    } else {
+      console.log('Semua milestone pada jangkauan lantai saat ini telah diklaim!');
+    }
+  }
+
+  // Tampilkan musuh di lantai berikutnya jika ada di cache floors
+  const nextFloor = (state.record_floor ?? 0) + 1;
+  const floorDef = (state.floors || []).find((f) => f.floor === nextFloor);
+  if (floorDef) {
+    console.log(`\n=== Lawan di Lantai ${nextFloor} (${floorDef.kind.toUpperCase()}) ===`);
+    console.log(`Level Musuh      : Lv ${floorDef.level}`);
+    floorDef.enemies.forEach((ene, idx) => {
+      console.log(`  ${idx + 1}. ${ene.name} | HP: ${Number(ene.hp).toLocaleString('id-ID')} | AGI: ${ene.agi} | DMG: ${ene.dmg} | Role: ${ene.role}`);
+    });
+  }
+  console.log('============================================================\n');
+}
+
+async function sweepTowerAction(client) {
+  logInfo('Mengambil status tower untuk penyapuan (sweep)...');
+  const state = await client.fetchTowerState();
+  const sw = state.sweep || {};
+
+  if (!sw.available) {
+    logWarn(`Penyapuan (sweep) tidak tersedia saat ini. Target: Lantai ${sw.target ?? '-'}, Minggu lalu: Lantai ${sw.last_week_best ?? '-'}.`);
+    return false;
+  }
+
+  logInfo(`Menjalankan sweep Shinobi Tower hingga target Lantai ${sw.target}...`);
+  const res = await client.sweepTower(state.week_id);
+  const wallet = res.wallet || {};
+  logSuccess(
+    `Sweep berhasil! Status: Lantai ${res.state?.record_floor ?? sw.target} | ` +
+    `Gold: ${Number(wallet.gold ?? 0).toLocaleString('id-ID')} | Token: ${wallet.token ?? 0}`
+  );
+  return true;
+}
+
+async function runTowerBot(client, config, cliOptions) {
+  logInfo('============================================================');
+  logInfo('NINJA HORIZON — FARMING SHINOBI TOWER (HEADLESS BOT)');
+  logInfo('============================================================');
+
+  // Pre-flight check avatar
+  const avatar = await client.fetchAvatar().catch((err) => {
+    if (err.message && err.message.includes('Karakter belum dibuat')) {
+      throw err;
+    }
+    return null;
+  });
+
+  const charLevel = Number(avatar?.level || 0);
+  if (avatar && charLevel < 10) {
+    logWarn(`Level karakter Anda (Lv ${charLevel}) belum mencukupi untuk Shinobi Tower (minimal Lv 10).`);
+    return;
+  }
+
+  // Cek apakah sweep otomatis diinginkan
+  if (cliOptions.autoSweep || config.towerAutoSweep) {
+    await sweepTowerAction(client).catch((e) => logWarn(`Auto-sweep gagal: ${e.message}`));
+  }
+
+  let state = await client.fetchTowerState();
+  let currentFloor = (state.record_floor ?? 0) + 1;
+  const targetFloor = cliOptions.targetFloor || config.towerTargetFloor || null;
+  const maxFloors = cliOptions.maxFloors || cliOptions.maxRuns || config.towerMaxFloors || 0;
+  const tacticalPlan = config.tacticalPlan !== false;
+
+  const minDelaySec = cliOptions.minDelay || config.minDelaySec || 4;
+  const maxDelaySec = cliOptions.maxDelay || config.maxDelaySec || 8;
+  const cooldownMinSec = cliOptions.cooldownMin || config.cooldownMinSec || 3;
+  const cooldownMaxSec = cliOptions.cooldownMax || config.cooldownMaxSec || 6;
+
+  logInfo(`Karakter          : ${avatar?.name || 'Ninja'} (Lv ${charLevel || '?'})`);
+  logInfo(`Minggu ID         : ${state.week_id}`);
+  logInfo(`Mulai dari Lantai : Lantai ${currentFloor}`);
+  if (targetFloor) logInfo(`Target Akhir      : Lantai ${targetFloor}`);
+  if (maxFloors > 0) logInfo(`Maksimal Pendakian: ${maxFloors} lantai`);
+  logInfo('------------------------------------------------------------');
+
+  let climbedCount = 0;
+  let totalWins = 0;
+
+  while (true) {
+    if (targetFloor && currentFloor > targetFloor) {
+      logSuccess(`Target pendakian tercapai (Lantai ${targetFloor})!`);
+      break;
+    }
+    if (maxFloors > 0 && climbedCount >= maxFloors) {
+      logSuccess(`Batas kuota pendakian sesi ini tercapai (${maxFloors} lantai).`);
+      break;
+    }
+
+    const runLabel = `Tower Floor ${currentFloor}`;
+    logInfo(`--- [${runLabel}] Memulai pertarungan lantai ${currentFloor}... ---`);
+
+    try {
+      const startResp = await client.startTower(state.week_id, currentFloor);
+      const enemies = startResp.context?.tower_enemies || [];
+      if (enemies.length) {
+        logInfo(`[${runLabel}] Lawan: ${enemies.map((e) => `${e.name} (HP: ${Number(e.hp).toLocaleString('id-ID')})`).join(', ')}`);
+      }
+
+      const { verdict, grant } = await executeBattleSession(
+        client,
+        startResp,
+        tacticalPlan,
+        { minDelaySec, maxDelaySec, label: runLabel }
+      );
+
+      if (verdict === 'win') {
+        climbedCount++;
+        totalWins++;
+        const tw = grant.tower || {};
+        const newBestStr = tw.new_best ? ' [REKOR BARU!]' : '';
+        const milestoneRewards = tw.milestone?.rewards
+          ? ` | Milestone: ${Object.entries(tw.milestone.rewards).map(([k, v]) => `${k} +${v}`).join(', ')}`
+          : '';
+        logSuccess(`[${runLabel}] MENANG! Berhasil mendaki ke lantai ${currentFloor}${newBestStr}${milestoneRewards}`);
+        currentFloor++;
+      } else {
+        logWarn(`[${runLabel}] Pertarungan kalah atau terhenti (verdict: ${verdict}). Berhenti memanjat Shinobi Tower.`);
+        break;
+      }
+    } catch (err) {
+      logError(`[${runLabel}] Kesalahan: ${err.message}`);
+      if (err.payload) logError(`Server payload: ${JSON.stringify(err.payload)}`);
+      break;
+    }
+
+    // Istirahat realistis antar lantai
+    const pauseSec = randomInt(cooldownMinSec, cooldownMaxSec);
+    logInfo(`Istirahat ${pauseSec} detik sebelum lantai berikutnya...`);
+    await sleep(pauseSec * 1000);
+  }
+
+  logSuccess(`Selesai sesi Shinobi Tower! Total lantai didaki: ${climbedCount}, Menang: ${totalWins}. Posisi sekarang: Lantai ${currentFloor - 1}`);
+}
+
+
 
 // ============================================================================
 // CLI Entrypoint
@@ -1618,6 +1822,12 @@ function parseArgs(argv) {
     hunting: false,
     eudemon: false,
     huntStatus: false,
+    tower: false,
+    towerStatus: false,
+    towerSweep: false,
+    autoSweep: false,
+    targetFloor: null,
+    maxFloors: null,
     loginGoogle: false,
     callbackUrl: null,
     missionId: null,
@@ -1656,6 +1866,19 @@ function parseArgs(argv) {
       opts.mode = 'eudemon';
     } else if (arg === '--hunt-status' || arg === '--hunting-status') {
       opts.huntStatus = true;
+    } else if (arg === '--tower') {
+      opts.tower = true;
+      opts.mode = 'tower';
+    } else if (arg === '--tower-status') {
+      opts.towerStatus = true;
+    } else if (arg === '--tower-sweep') {
+      opts.towerSweep = true;
+    } else if (arg === '--auto-sweep') {
+      opts.autoSweep = true;
+    } else if ((arg === '--target-floor' || arg === '--floor') && argv[i + 1]) {
+      opts.targetFloor = Number(argv[++i]);
+    } else if (arg === '--max-floors' && argv[i + 1]) {
+      opts.maxFloors = Number(argv[++i]);
     } else if (arg === '--login-google' || arg === '--login') {
       opts.loginGoogle = true;
       if (argv[i + 1] && !argv[i + 1].startsWith('--')) {
@@ -1696,7 +1919,7 @@ async function main() {
 
   if (cliOptions.help) {
     console.log(`
-Ninja Horizon AFK Farming Bot (Misi, World Boss, Event Boss)
+Ninja Horizon AFK Farming Bot (Misi, World Boss, Event Boss, Hunting House, Shinobi Tower)
 
 Penggunaan:
   node bot.js [opsi]
@@ -1725,6 +1948,14 @@ Farming Hunting House, Eudemon Garden, & Event Boss:
   --eudemon, --garden      Jalankan farming otomatis Eudemon Garden (EXP Tinggi & Senjata Forge)
   --event, --event-boss    Jalankan farming otomatis Event Boss (Event Stamina)
   --boss <id>, --room <id> Tentukan ID bos / room tertentu (default: auto rekomendasi)
+
+Farming Shinobi Tower (Tower of Trials):
+  --tower-status           Tampilkan status rekor lantai, rank mingguan, & sweep Shinobi Tower
+  --tower                  Jalankan auto-climb Shinobi Tower memanjat lantai demi lantai
+  --tower-sweep            Jalankan penyapuan (sweep) hadiah lantai jika tersedia
+  --target-floor <lantai>  Tentukan lantai target akhir untuk berhenti (contoh: --target-floor 80)
+  --max-floors <jumlah>    Batas maksimal jumlah lantai yang dinaiki dalam satu kali sesi
+  --auto-sweep             Lakukan sweep otomatis sebelum memulai pendakian lantai
 `);
     return;
   }
@@ -1767,12 +1998,23 @@ Farming Hunting House, Eudemon Garden, & Event Boss:
     return;
   }
 
+  if (cliOptions.towerStatus) {
+    await showTowerStatus(client);
+    return;
+  }
+
+  if (cliOptions.towerSweep) {
+    await sweepTowerAction(client);
+    return;
+  }
+
   const selectedMode =
     cliOptions.mode ||
     (cliOptions.worldBoss ? 'wb' : null) ||
     (cliOptions.eventBoss ? 'event' : null) ||
     (cliOptions.hunting ? 'hunting' : null) ||
     (cliOptions.eudemon ? 'eudemon' : null) ||
+    (cliOptions.tower ? 'tower' : null) ||
     config.mode ||
     'mission';
 
@@ -1784,13 +2026,25 @@ Farming Hunting House, Eudemon Garden, & Event Boss:
     await runHuntBot(client, config, cliOptions, 'hunting');
   } else if (selectedMode === 'eudemon' || selectedMode === 'garden') {
     await runHuntBot(client, config, cliOptions, 'eudemon');
+  } else if (selectedMode === 'tower') {
+    await runTowerBot(client, config, cliOptions);
   } else {
     await runAfkBot(client, config, cliOptions);
   }
 }
 
-main().catch((err) => {
-  logError(err.message || String(err));
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((err) => {
+    logError(err.message || String(err));
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  NinjaHorizonClient,
+  executeBattleSession,
+  showTowerStatus,
+  sweepTowerAction,
+  runTowerBot,
+};
 
