@@ -218,3 +218,46 @@ Aplikasi asli memperbarui dirinya lewat **HotUpdater OTA** (`https://updates.nin
 
 ### 6.3 Pemilihan misi otomatis
 Dengan `"missionId": "auto"` (default baru), bot membaca level dari `player_avatar` dan memilih misi non-exam dengan XP tertinggi dari `mission_defs` yang levelnya ≤ level karakter. Lihat kandidatnya dengan `node bot.js --list-missions`.
+
+
+---
+
+## 7. Fitur Baru: Farming World Boss & Event Boss
+
+### 7.1 Mekanisme World Boss
+World Boss berjalan secara mingguan (`week_id`) dan menggunakan sistem tiket harian:
+- **Status & Info**: RPC `world_boss_state` mengembalikan info bos aktif, tiket tersisa (`tickets`), waktu reset, serta daftar milestone hadiah skor mingguan (`milestones`).
+- **Memulai Pertarungan**: RPC `world_boss_start` dengan parameter `{"p_week_id": weekId, "p_request_id": uuid()}`. RPC ini menghasilkan `session.id` yang langsung dihubungkan ke Edge Function `/functions/v1/resolve-battle`.
+- **Eksekusi Battle**: Bot melakukan simulasi giliran via `oracle_engine.js`, menghitung damage akumulatif terhadap boss, dan mengirimkan receipt ke server dengan jeda waktu realistis.
+- **Auto Claim Milestones**: Jika flag `--auto-claim` diaktifkan, bot secara otomatis memanggil RPC `world_boss_claim` untuk setiap milestone skor yang sudah terpenuhi namun belum diklaim (`claimed: false`).
+
+**Contoh Perintah World Boss:**
+```powershell
+# Cek sisa tiket, HP/level bos, dan milestone mingguan
+node bot.js --wb-status
+
+# Habiskan seluruh tiket World Boss hari ini
+node bot.js --wb
+
+# Habiskan 2 tiket World Boss dan klaim milestone yang tercapai
+node bot.js --wb --runs 2 --auto-claim
+```
+
+### 7.2 Mekanisme Event Boss & Hunting House
+Event Boss terintegrasi dengan modul Hunting House (`hunt_start`):
+- **Status & Katalog Event**: Bot mengambil data bos event via RPC `events_surface_state` dan `hunting_catalog_state`.
+- **Pengecekan Stamina**: Memeriksa ketersediaan stamina event via RPC `event_stamina`.
+- **Memulai Pertarungan**: RPC `hunt_start` dengan parameter `{"p_room": roomId}`.
+- **Eksekusi Battle**: Menggunakan pipeline yang sama (`resolve-battle` -> `oracle_engine` -> `resolve-battle`), memastikan drop material event terkumpul secara otomatis.
+
+**Contoh Perintah Event Boss:**
+```powershell
+# Lihat daftar event boss aktif dan katalog monster hunting
+node bot.js --list-bosses
+
+# Serang event boss yang direkomendasikan otomatis
+node bot.js --event
+
+# Serang event boss spesifik sebanyak 3 ronde
+node bot.js --event --boss-id evt_boss_1 --runs 3
+```

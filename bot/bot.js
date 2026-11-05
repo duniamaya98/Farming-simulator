@@ -20,7 +20,15 @@
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
+const crypto = require('crypto');
 const { exec } = require('child_process');
+
+function generateRequestId() {
+  if (typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return 'req_' + Math.random().toString(36).substring(2) + Date.now().toString(36);
+}
 const {
   engineForBattle,
   supportedBattleEngines,
@@ -263,10 +271,23 @@ class NinjaHorizonClient {
     }
 
     if (!res.ok) {
-      const errMsg =
+      let rawMsg =
         (data && (data.message || data.error || data.details || data.hint)) ||
         `HTTP ${res.status}`;
-      const err = new Error(`RPC ${fnName} gagal: ${errMsg}`);
+      
+      const ptLockMatch = String(rawMsg).match(/^PTLOCK:([^:]+):(\d+)/);
+      if (ptLockMatch) {
+        rawMsg = `Fitur '${ptLockMatch[1]}' terkunci oleh server (membutuhkan minimal Level ${ptLockMatch[2]})`;
+      } else if (
+        String(rawMsg).includes('player_event_stamina_user_id_fkey') ||
+        rawMsg === 'no avatar' ||
+        rawMsg === 'player avatar is missing' ||
+        String(data?.details || '').includes('is not present in table "player_avatar"')
+      ) {
+        rawMsg = `Karakter belum dibuat di akun ini! Silakan buat karakter (Avatar) di dalam game terlebih dahulu.`;
+      }
+
+      const err = new Error(`RPC ${fnName} gagal: ${rawMsg}`);
       err.status = res.status;
       err.data = data;
       throw err;
@@ -377,6 +398,71 @@ class NinjaHorizonClient {
    */
   async abandonMission(sessionId) {
     return await this.rpc('mission_abandon', { p_session: sessionId });
+  }
+
+  // ==========================================================================
+  // World Boss RPCs (func[9182] - func[9185])
+  // ==========================================================================
+  async fetchWorldBossState() {
+    return await this.rpc('world_boss_state');
+  }
+
+  async startWorldBoss(weekId, requestId = generateRequestId()) {
+    return await this.rpc('world_boss_start', {
+      p_week_id: weekId,
+      p_request_id: requestId,
+    });
+  }
+
+  async refillWorldBoss(requestId = generateRequestId()) {
+    return await this.rpc('world_boss_refill', {
+      p_request_id: requestId,
+    });
+  }
+
+  async claimWorldBoss(weekId, milestone) {
+    return await this.rpc('world_boss_claim', {
+      p_week_id: weekId,
+      p_milestone: milestone,
+    });
+  }
+
+  async fetchWorldBossRankings(weekId, page = 1) {
+    return await this.rpc('world_boss_rankings', {
+      p_week_id: weekId,
+      p_page: page,
+    });
+  }
+
+  // ==========================================================================
+  // Event Boss & Hunting House RPCs (func[22684], func[22877], func[29089])
+  // ==========================================================================
+  async fetchEventsSurfaceState() {
+    return await this.rpc('events_surface_state');
+  }
+
+  async fetchEventStamina() {
+    return await this.rpc('event_stamina');
+  }
+
+  async refillEventStamina(requestId = generateRequestId()) {
+    return await this.rpc('event_refill_stamina', {
+      p_request_id: requestId,
+    });
+  }
+
+  async fetchHuntingCatalog() {
+    return await this.rpc('hunting_catalog_state');
+  }
+
+  async fetchHuntingPlayerState() {
+    return await this.rpc('hunting_player_state');
+  }
+
+  async startHunt(roomId) {
+    return await this.rpc('hunt_start', {
+      p_room: roomId,
+    });
   }
 
   /**
@@ -508,9 +594,9 @@ function runOfflineSimulationTest() {
 
     logSuccess(
       `Engine [${ver}] -> Status: ${simResult.client.status.toUpperCase()} | ` +
-        `Round: ${simResult.client.round} | Turns: ${simResult.client.turns} | ` +
-        `Actions: ${simResult.actions.length} | Checksum: ${simResult.client.checksum} (Replay Verified) | ` +
-        `Waktu: ${elapsedMs}ms`
+      `Round: ${simResult.client.round} | Turns: ${simResult.client.turns} | ` +
+      `Actions: ${simResult.actions.length} | Checksum: ${simResult.client.checksum} (Replay Verified) | ` +
+      `Waktu: ${elapsedMs}ms`
     );
   }
 
@@ -526,14 +612,14 @@ function loadDailyWins() {
   try {
     const d = JSON.parse(fs.readFileSync(DAILY_PATH, 'utf8'));
     if (d.date === today) return d;
-  } catch {}
+  } catch { }
   return { date: today, wins: 0, xp: 0 };
 }
 
 function saveDailyWins(daily) {
   try {
     fs.writeFileSync(DAILY_PATH, JSON.stringify(daily, null, 2), 'utf8');
-  } catch {}
+  } catch { }
 }
 
 /** Memastikan versi engine lokal masih diterima server (game_config.battle_engine_policy). */
@@ -545,8 +631,8 @@ async function checkEnginePolicy(client) {
   if (usable.length === 0) {
     throw new Error(
       `Semua engine lokal (${supportedBattleEngines.join(', ')}) sudah tidak diterima server ` +
-        `(active=${policy.active}, accepted=${(policy.accepted || []).join(', ')}). ` +
-        `Perlu ekstrak ulang engine dari bundle OTA terbaru.`
+      `(active=${policy.active}, accepted=${(policy.accepted || []).join(', ')}). ` +
+      `Perlu ekstrak ulang engine dari bundle OTA terbaru.`
     );
   }
   return { policy, usable };
@@ -556,12 +642,71 @@ async function checkEnginePolicy(client) {
 async function pickBestMission(client, level) {
   const rows = await client.rest(
     `mission_defs?select=id,name,grade,level,xp,gold&is_exam=eq.false&has_battle=eq.true` +
-      `&level=lte.${level}&order=xp.desc,level.desc&limit=5`
+    `&level=lte.${level}&order=xp.desc,level.desc&limit=5`
   );
   return rows || [];
 }
 
 // ============================================================================
+
+// ============================================================================
+// Eksekutor Sesi Pertarungan Bersama (Misi, World Boss, Event Boss, Hunting)
+// ============================================================================
+async function executeBattleSession(client, sessionResp, tacticalPlan, options = {}) {
+  const { minDelaySec = 8, maxDelaySec = 15, label = 'Battle' } = options;
+
+  const session = sessionResp?.session || sessionResp;
+  const sessionId = session?.id || session?.session_id || session?.sessionId;
+  if (!sessionId) {
+    throw new Error(`Tidak menemukan sessionId dari respons pertarungan: ${JSON.stringify(sessionResp)}`);
+  }
+
+  let build = session?.start || null;
+  if (!build || !Array.isArray(build.units)) {
+    logInfo(`[${label}] Meminta inisialisasi pertarungan (session: ${sessionId})...`);
+    const startResp = await client.startBattle(sessionId);
+    build = startResp?.build || startResp?.start || startResp;
+  }
+
+  if (!build || !Array.isArray(build.units)) {
+    throw new Error(`Payload build pertarungan tidak valid: ${JSON.stringify(build)}`);
+  }
+
+  const engineVer = build.engineVersion || LATEST_ENGINE_VERSION;
+  logInfo(
+    `[${label}] Battle dimulai! Engine: ${engineVer} | Seed: ${build.seed} | ` +
+    `Units: ${build.units.length} | Waves: ${Array.isArray(build.waves) ? build.waves.length : 0}`
+  );
+
+  const simStart = Date.now();
+  const { state, actions, client: clientDiag } = simulateBattle(build, {
+    autoPlan: tacticalPlan,
+  });
+  const simDurationMs = Date.now() - simStart;
+
+  logInfo(
+    `[${label}] Simulasi selesai dalam ${simDurationMs}ms -> ` +
+    `Status: ${clientDiag.status.toUpperCase()} | Round: ${clientDiag.round} | ` +
+    `Turns: ${clientDiag.turns} | Actions: ${actions.length} | Checksum: ${clientDiag.checksum}`
+  );
+
+  const perTurnMs = randomInt(700, 950);
+  const turnDelayMs = clientDiag.turns * perTurnMs;
+  const baseDelayMs = randomInt(minDelaySec * 1000, maxDelaySec * 1000);
+  const totalWaitMs = Math.max(baseDelayMs, turnDelayMs);
+  logInfo(
+    `[${label}] Menunggu pacing realistis ${(totalWaitMs / 1000).toFixed(1)} detik ` +
+    `(${clientDiag.turns} turns @ ~${perTurnMs}ms/turn) sebelum mengirim penyelesaian battle...`
+  );
+  await sleep(totalWaitMs);
+
+  const receipt = await client.finishBattle(sessionId, actions, clientDiag);
+  const verdict = receipt?.verdict || clientDiag.status;
+  const grant = receipt?.grant || {};
+
+  return { sessionId, build, receipt, verdict, grant, clientDiag, actions };
+}
+
 // Mode Status & Daftar Misi (`--status`, `--list-missions`)
 // ============================================================================
 async function showStatus(client) {
@@ -577,7 +722,9 @@ async function showStatus(client) {
     logInfo(`Nama / Rank / Level : ${avatar.name} / ${avatar.rank} / Lv ${avatar.level}`);
     logInfo(`Total XP            : ${Number(avatar.xp).toLocaleString('id-ID')}`);
   } else {
-    console.log(avatar);
+    logWarn('Belum ada karakter (Avatar) yang dibuat pada akun ini!');
+    logInfo('Silakan buka aplikasi Ninja Horizon di HP dan buat karakter ninja Anda terlebih dahulu,');
+    logInfo('atau login dengan akun Google yang memiliki karakter via: node bot.js --login-google');
   }
 
   const econ = cfg?.mission_economy;
@@ -587,7 +734,7 @@ async function showStatus(client) {
     logInfo(`Daily Double        : ${econ.daily_double?.wins ?? '-'} kemenangan pertama/hari x${econ.daily_double?.mult ?? '-'}`);
     logInfo(
       `Gold Soft-Cap       : setelah ${econ.mission_gold_soft?.full_wins ?? '-'} menang/hari, gold jadi ` +
-        `${econ.mission_gold_soft?.soft_pct ?? '-'}%`
+      `${econ.mission_gold_soft?.soft_pct ?? '-'}%`
     );
   }
   logInfo(`Menang hari ini (bot, UTC ${daily.date}) : ${daily.wins} | XP: +${daily.xp.toLocaleString('id-ID')}`);
@@ -617,10 +764,126 @@ async function listMissions(client) {
   logInfo(`Misi dengan XP tertinggi untuk Lv ${level}:`);
   const rows = await client.rest(
     `mission_defs?select=id,name,grade,level,xp,gold&is_exam=eq.false&has_battle=eq.true` +
-      `&level=lte.${level}&order=xp.desc,level.desc&limit=15`
+    `&level=lte.${level}&order=xp.desc,level.desc&limit=15`
   );
   console.table(rows);
 }
+
+async function showWorldBossStatus(client) {
+  logInfo('Mengambil status World Boss & leaderboard dari server...');
+  try {
+    const avatar = await client.fetchAvatar().catch(() => null);
+    if (!avatar) {
+      logWarn('Belum ada karakter (Avatar) yang dibuat pada akun ini!');
+      logInfo('World Boss memerlukan akun dengan karakter yang sudah terdaftar di Ninja Horizon.');
+      return;
+    }
+    const wbState = await client.fetchWorldBossState();
+    console.log('\n=== World Boss State ===');
+    logInfo(`Available / Active : ${wbState?.available ? 'YA (AKTIF)' : 'TIDAK (TUTUP)'}`);
+    if (wbState?.week_id) logInfo(`Week ID            : ${wbState.week_id}`);
+    if (wbState?.boss) {
+      logInfo(`Boss Name / Level  : ${wbState.boss.name || wbState.boss.id} (Lv ${wbState.boss.level || '-'})`);
+      if (wbState.boss.hp) logInfo(`Boss HP            : ${Number(wbState.boss.hp).toLocaleString('id-ID')}`);
+    }
+    if (wbState?.player) {
+      const p = wbState.player;
+      logInfo(`Attempts Left      : ${p.attempts ?? p.tickets ?? p.fights_left ?? '-'}`);
+      logInfo(`Total Damage Dealt : ${Number(p.total_damage || p.damage || 0).toLocaleString('id-ID')}`);
+      logInfo(`Score / Rank       : ${p.score || '-'} / #${p.rank || '-'}`);
+    }
+    if (Array.isArray(wbState?.milestones)) {
+      console.log('\n=== Milestones Hadiah Damage ===');
+      for (const m of wbState.milestones) {
+        const claimed = m.claimed ? '[SUDAH KLAIM]' : (m.achieved || m.completed ? '[SIAP KLAIM]' : '[BELUM]');
+        logInfo(`- Milestone ${m.id || m.target_damage}: Target ${Number(m.damage || m.score || m.target_damage).toLocaleString('id-ID')} -> ${claimed}`);
+      }
+    }
+    if (wbState?.week_id) {
+      const ranks = await client.fetchWorldBossRankings(wbState.week_id, 1).catch(() => null);
+      const rows = ranks?.leaderboard || ranks?.rankings || (Array.isArray(ranks) ? ranks : []);
+      if (Array.isArray(rows) && rows.length > 0) {
+        console.log('\n=== Top 5 Leaderboard World Boss ===');
+        console.table(rows.slice(0, 5));
+      }
+    }
+  } catch (err) {
+    logError(`Gagal mengambil status World Boss: ${err.message}`);
+  }
+}
+
+async function listBosses(client) {
+  logInfo('Mengambil katalog bos Event & Hunting House dari server...');
+  try {
+    const [eventsState, eventStam, huntCatalog] = await Promise.all([
+      client.fetchEventsSurfaceState().catch((e) => ({ error: e.message })),
+      client.fetchEventStamina().catch((e) => ({ error: e.message })),
+      client.fetchHuntingCatalog().catch((e) => ({ error: e.message })),
+    ]);
+
+    const definitions = huntCatalog?.definitions || [];
+    const defMap = new Map(definitions.map((d) => [d.id, d]));
+
+    console.log('\n=== Event Bosses (Aktif) ===');
+    if (eventStam && !eventStam.error) {
+      logInfo(`Event Stamina: ${eventStam.stamina ?? eventStam.current ?? '-'}/${eventStam.max ?? '-'}`);
+    }
+    const rawBosses = eventsState?.bosses || [];
+    const eventBosses = rawBosses.filter((b) => {
+      const id = b.id || b.room_id || '';
+      return !id.startsWith('world_boss_') && b.event_id !== 'world_boss_vadar';
+    });
+
+    if (Array.isArray(eventBosses) && eventBosses.length > 0) {
+      console.table(
+        eventBosses.map((b) => {
+          const def = defMap.get(b.id) || {};
+          return {
+            RoomID: b.id || b.room_id,
+            Name: def.name || b.name || b.id,
+            Event: b.event_id || '-',
+            LevelReq: def.encounter_level || b.level || 10,
+            Drops: def.drops?.materials ? `${def.drops.materials.length} material types` : 'Event Materials',
+          };
+        })
+      );
+    } else {
+      logInfo('Tidak ada Event Boss khusus (selain World Boss) yang aktif saat ini.');
+    }
+
+    console.log('\n=== Hunting House Bosses (Permanen — Syarat Lv 10+) ===');
+    const huntRooms = definitions.filter((r) => r.venue === 'hunting');
+    if (huntRooms.length > 0) {
+      console.table(
+        huntRooms.map((r) => ({
+          RoomID: r.id,
+          Name: r.name || r.id,
+          LevelReq: r.encounter_level ?? r.level ?? '-',
+          XP: r.xp != null ? Number(r.xp).toLocaleString('id-ID') : '-',
+          Gold: r.gold != null ? Number(r.gold).toLocaleString('id-ID') : '-',
+        }))
+      );
+    } else {
+      logInfo('Katalog Hunting House tidak mengembalikan daftar room.');
+    }
+
+    const eudemonRooms = definitions.filter((r) => r.venue === 'eudemon');
+    if (eudemonRooms.length > 0) {
+      console.log('\n=== Eudemon Garden Bosses (Syarat Lv 10+) ===');
+      console.table(
+        eudemonRooms.slice(0, 5).map((r) => ({
+          RoomID: r.id,
+          Name: r.name || r.id,
+          LevelReq: r.encounter_level ?? r.level ?? '-',
+          XP: r.xp != null ? Number(r.xp).toLocaleString('id-ID') : '-',
+        }))
+      );
+    }
+  } catch (err) {
+    logError(`Gagal mengambil daftar bos: ${err.message}`);
+  }
+}
+
 
 // ============================================================================
 // Mode Login SSO Google (`--login-google`) â€” Meniru func[10494] & func[25111]
@@ -708,7 +971,7 @@ async function runGoogleSsoLogin(client, directCallbackUrl = null) {
   if (!parsed.access_token || !parsed.refresh_token) {
     throw new Error(
       'Tidak menemukan access_token dan refresh_token pada URL yang ditempelkan. ' +
-        'Pastikan Anda menyalin seluruh URL dari Address Bar setelah memilih akun Google (yang mengandung #access_token=...&refresh_token=...).'
+      'Pastikan Anda menyalin seluruh URL dari Address Bar setelah memilih akun Google (yang mengandung #access_token=...&refresh_token=...).'
     );
   }
 
@@ -724,16 +987,16 @@ async function runGoogleSsoLogin(client, directCallbackUrl = null) {
     expiresAt,
     user: jwtPayload
       ? {
-          id: jwtPayload.sub,
-          email: jwtPayload.email || null,
-          provider: jwtPayload.app_metadata?.provider || 'google',
-        }
+        id: jwtPayload.sub,
+        email: jwtPayload.email || null,
+        provider: jwtPayload.app_metadata?.provider || 'google',
+      }
       : null,
   });
 
   logSuccess(
     `Sesi SSO Google berhasil disimpan ke bot/session.json! ` +
-      `(User: ${jwtPayload?.email || jwtPayload?.sub || 'Terautentikasi'})`
+    `(User: ${jwtPayload?.email || jwtPayload?.sub || 'Terautentikasi'})`
   );
   logInfo('Menguji sesi dengan memperbarui token & mengambil status misi...');
   await client.loginWithRefreshToken(client.session.refreshToken);
@@ -809,7 +1072,7 @@ async function runAfkBot(client, config, cliOptions) {
     if (stopOnSoftCap && winsToday >= softCapLimit) {
       logSuccess(
         `Target kuota harian tercapai (${winsToday}/${softCapLimit} kemenangan). ` +
-          `Total EXP diperoleh sesi ini: +${totalXpGained} EXP. Bot berhenti dengan aman.`
+        `Total EXP diperoleh sesi ini: +${totalXpGained} EXP. Bot berhenti dengan aman.`
       );
       break;
     }
@@ -842,7 +1105,7 @@ async function runAfkBot(client, config, cliOptions) {
       const engineVer = build.engineVersion || LATEST_ENGINE_VERSION;
       logInfo(
         `[Run #${totalRuns}] Battle dimulai! Engine: ${engineVer} | Seed: ${build.seed} | ` +
-          `Units: ${build.units.length} | Waves: ${Array.isArray(build.waves) ? build.waves.length : 0}`
+        `Units: ${build.units.length} | Waves: ${Array.isArray(build.waves) ? build.waves.length : 0}`
       );
 
       // 3. Jalankan simulasi deterministik di mesin Oracle
@@ -854,8 +1117,8 @@ async function runAfkBot(client, config, cliOptions) {
 
       logInfo(
         `[Run #${totalRuns}] Simulasi selesai dalam ${simDurationMs}ms -> ` +
-          `Status: ${clientDiag.status.toUpperCase()} | Round: ${clientDiag.round} | ` +
-          `Turns: ${clientDiag.turns} | Actions: ${actions.length} | Checksum: ${clientDiag.checksum}`
+        `Status: ${clientDiag.status.toUpperCase()} | Round: ${clientDiag.round} | ` +
+        `Turns: ${clientDiag.turns} | Actions: ${actions.length} | Checksum: ${clientDiag.checksum}`
       );
 
       // 4. Jeda waktu manusiawi proporsional dengan animasi per giliran (~650ms - 950ms/turn) + random jitter
@@ -866,7 +1129,7 @@ async function runAfkBot(client, config, cliOptions) {
       const totalWaitMs = Math.max(baseDelayMs, turnDelayMs);
       logInfo(
         `[Run #${totalRuns}] Menunggu pacing realistis ${(totalWaitMs / 1000).toFixed(1)} detik ` +
-          `(${clientDiag.turns} turns @ ~${perTurnMs}ms/turn) sebelum mengirim penyelesaian battle...`
+        `(${clientDiag.turns} turns @ ~${perTurnMs}ms/turn) sebelum mengirim penyelesaian battle...`
       );
       await sleep(totalWaitMs);
 
@@ -901,14 +1164,14 @@ async function runAfkBot(client, config, cliOptions) {
         saveDailyWins(daily);
         logSuccess(
           `[Run #${totalRuns}] MENANG! +${xpAwarded.toLocaleString('id-ID')} XP` +
-            (currentGold ? ` | Gold: ${currentGold}` : '') +
-            ` | Level: ${currentLevel}${leveledUp ? ' (LEVEL UP!)' : ''}` +
-            ` | Kemenangan Hari Ini: ${winsToday}/${softCapLimit}`
+          (currentGold ? ` | Gold: ${currentGold}` : '') +
+          ` | Level: ${currentLevel}${leveledUp ? ' (LEVEL UP!)' : ''}` +
+          ` | Kemenangan Hari Ini: ${winsToday}/${softCapLimit}`
         );
       } else {
         logWarn(
           `[Run #${totalRuns}] Pertarungan berakhir dengan verdict: ${verdict}. ` +
-            `Detail: ${JSON.stringify(receipt)}`
+          `Detail: ${JSON.stringify(receipt)}`
         );
       }
     } catch (err) {
@@ -931,6 +1194,308 @@ async function runAfkBot(client, config, cliOptions) {
 }
 
 // ============================================================================
+// Loop Farming World Boss
+// ============================================================================
+async function runWorldBossBot(client, config, cliOptions) {
+  const minDelaySec = Number(config.minDelaySeconds ?? 8);
+  const maxDelaySec = Number(config.maxDelaySeconds ?? 15);
+  const cooldownMinSec = Number(config.betweenMissionMinSeconds ?? 4);
+  const cooldownMaxSec = Number(config.betweenMissionMaxSeconds ?? 9);
+  const maxRuns = Number(cliOptions.maxRuns ?? config.maxRuns ?? 0);
+  const autoPlan = config.autoPlan !== false;
+  const autoClaim = cliOptions.autoClaim || config.worldBoss?.autoClaimMilestones !== false;
+  const autoRefill = cliOptions.autoRefill || config.worldBoss?.autoRefill === true;
+
+  for (const ver of supportedBattleEngines) {
+    engineForBattle(ver);
+  }
+
+  const pol = await checkEnginePolicy(client);
+  if (pol) logInfo(`Engine kompatibel: ${pol.usable.join(', ')} (server active: ${pol.policy.active})`);
+
+  const avatar = await client.fetchAvatar().catch(() => null);
+  if (!avatar) {
+    logError('============================================================');
+    logError('KESALAHAN: Karakter (Avatar) tidak ditemukan pada akun ini!');
+    logError('Pastikan Anda telah membuat karakter di dalam aplikasi Ninja Horizon,');
+    logError('atau pastikan Anda login dengan akun Google yang benar via:');
+    logError('  node bot.js --login-google');
+    logError('============================================================');
+    return;
+  }
+
+  const tacticalPlan = autoPlan && avatar?.auto_plan && typeof avatar.auto_plan === 'object' ? avatar.auto_plan : null;
+
+  logInfo('============================================================');
+  logInfo('NINJA HORIZON — FARMING WORLD BOSS (HEADLESS BOT)');
+  logInfo('============================================================');
+  logInfo(`Karakter           : ${avatar.name} (Lv ${avatar.level}, ${avatar.rank})`);
+
+  const wbState = await client.fetchWorldBossState();
+  if (!wbState || !wbState.available) {
+    logWarn('World Boss saat ini sedang TIDAK TERSEDIA atau ditutup oleh server.');
+    return;
+  }
+
+  const weekId = wbState.week_id;
+  logInfo(`World Boss Aktif   : Week ID ${weekId}`);
+  logInfo(`Auto Claim Hadiah  : ${autoClaim ? 'AKTIF' : 'NON-AKTIF'}`);
+  logInfo(`Auto Refill Tiket  : ${autoRefill ? 'AKTIF' : 'NON-AKTIF'}`);
+  logInfo('------------------------------------------------------------');
+
+  let totalRuns = 0;
+  let totalDamageDealt = 0;
+
+  while (maxRuns <= 0 || totalRuns < maxRuns) {
+    totalRuns++;
+    const runLabel = `WorldBoss #${totalRuns}`;
+    logInfo(`--- [${runLabel}] Menantang World Boss (Week: ${weekId})... ---`);
+
+    try {
+      let startResp;
+      try {
+        startResp = await client.startWorldBoss(weekId, generateRequestId());
+      } catch (err) {
+        const isOutOfAttempts = err.message?.toLowerCase().includes('attempt') ||
+          err.message?.toLowerCase().includes('ticket') ||
+          err.message?.toLowerCase().includes('limit');
+        if (isOutOfAttempts && autoRefill) {
+          logInfo(`[${runLabel}] Tiket habis, mencoba refill tiket via world_boss_refill...`);
+          await client.refillWorldBoss(generateRequestId());
+          logSuccess(`[${runLabel}] Refill tiket berhasil! Mengulang start...`);
+          startResp = await client.startWorldBoss(weekId, generateRequestId());
+        } else {
+          throw err;
+        }
+      }
+
+      const { receipt, verdict, grant } = await executeBattleSession(
+        client,
+        startResp,
+        tacticalPlan,
+        { minDelaySec, maxDelaySec, label: runLabel }
+      );
+
+      const dmg = grant.damage ?? grant.total_damage ?? receipt?.damage ?? 0;
+      totalDamageDealt += Number(dmg);
+      logSuccess(
+        `[${runLabel}] Pertarungan selesai! Status: ${verdict.toUpperCase()}` +
+        (dmg ? ` | Damage: ${Number(dmg).toLocaleString('id-ID')}` : '') +
+        ` | Akumulasi Sesi: ${totalDamageDealt.toLocaleString('id-ID')} Total Damage`
+      );
+
+      // Auto-claim milestones yang telah tercapai
+      if (autoClaim) {
+        const freshState = await client.fetchWorldBossState().catch(() => null);
+        if (freshState && Array.isArray(freshState.milestones)) {
+          for (const m of freshState.milestones) {
+            if ((m.achieved || m.completed) && !m.claimed) {
+              try {
+                const milestoneKey = m.id ?? m.milestone ?? m.milestone_id ?? m.target_damage;
+                logInfo(`[${runLabel}] Mengklaim hadiah milestone ${milestoneKey}...`);
+                await client.claimWorldBoss(weekId, milestoneKey);
+                logSuccess(`[${runLabel}] Hadiah milestone ${milestoneKey} berhasil diklaim!`);
+              } catch (cErr) {
+                logWarn(`Gagal klaim milestone: ${cErr.message}`);
+              }
+            }
+          }
+        }
+      }
+    } catch (err) {
+      logError(`[${runLabel}] Kesalahan: ${err.message}`);
+      if (err.payload) logError(`Server payload: ${JSON.stringify(err.payload)}`);
+      break;
+    }
+
+    if (maxRuns <= 0 || totalRuns < maxRuns) {
+      const pauseSec = randomInt(cooldownMinSec, cooldownMaxSec);
+      logInfo(`Istirahat ${pauseSec} detik sebelum pertarungan berikutnya...`);
+      await sleep(pauseSec * 1000);
+    }
+  }
+
+  logSuccess(
+    `Selesai farming World Boss! Total pertarungan: ${totalRuns}, Total damage: ${totalDamageDealt.toLocaleString('id-ID')}`
+  );
+}
+
+// ============================================================================
+// Loop Farming Event Boss & Hunting House
+// ============================================================================
+async function runEventBossBot(client, config, cliOptions, mode = 'event') {
+  const isHuntingMode = mode === 'hunting';
+  const minDelaySec = Number(config.minDelaySeconds ?? 8);
+  const maxDelaySec = Number(config.maxDelaySeconds ?? 15);
+  const cooldownMinSec = Number(config.betweenMissionMinSeconds ?? 4);
+  const cooldownMaxSec = Number(config.betweenMissionMaxSeconds ?? 9);
+  const maxRuns = Number(cliOptions.maxRuns ?? config.maxRuns ?? 0);
+  const autoPlan = config.autoPlan !== false;
+  const autoRefillStamina = cliOptions.autoRefill || config.eventBoss?.autoRefillStamina === true;
+  let targetBossId = cliOptions.bossId || config.bossId || 'auto';
+
+  for (const ver of supportedBattleEngines) {
+    engineForBattle(ver);
+  }
+
+  const pol = await checkEnginePolicy(client);
+  if (pol) logInfo(`Engine kompatibel: ${pol.usable.join(', ')} (server active: ${pol.policy.active})`);
+
+  const avatar = await client.fetchAvatar().catch(() => null);
+  if (!avatar) {
+    logError('============================================================');
+    logError('KESALAHAN: Karakter (Avatar) tidak ditemukan pada akun ini!');
+    logError('Pastikan Anda telah membuat karakter di dalam aplikasi Ninja Horizon,');
+    logError('atau pastikan Anda login dengan akun Google yang benar via:');
+    logError('  node bot.js --login-google');
+    logError('============================================================');
+    return;
+  }
+
+  const charLevel = Number(avatar.level || 1);
+  if (charLevel < 10) {
+    logError('============================================================');
+    logError(`KESALAHAN: Level karakter (${charLevel}) belum mencukupi!`);
+    logError('Fitur Hunting House & Event Boss mensyaratkan minimal Level 10 (PTLOCK:hunting:10).');
+    logError('Silakan naikkan level karakter Anda terlebih dahulu menggunakan farming misi:');
+    logError('  node bot.js --runs 10');
+    logError('============================================================');
+    return;
+  }
+
+  const tacticalPlan = autoPlan && avatar?.auto_plan && typeof avatar.auto_plan === 'object' ? avatar.auto_plan : null;
+
+  logInfo('============================================================');
+  logInfo(`NINJA HORIZON — FARMING ${isHuntingMode ? 'HUNTING HOUSE' : 'EVENT BOSS'} (HEADLESS BOT)`);
+  logInfo('============================================================');
+  logInfo(`Karakter           : ${avatar.name} (Lv ${avatar.level}, ${avatar.rank})`);
+
+  if (String(targetBossId).toLowerCase() === 'auto') {
+    if (!isHuntingMode) {
+      const [eventsState, catalog] = await Promise.all([
+        client.fetchEventsSurfaceState().catch(() => null),
+        client.fetchHuntingCatalog().catch(() => null),
+      ]);
+      const definitions = catalog?.definitions || [];
+      const defMap = new Map(definitions.map((d) => [d.id, d]));
+
+      // Filter event bosses (exclude world boss vadar/yudai)
+      const rawBosses = eventsState?.bosses || [];
+      const eventBosses = rawBosses.filter((b) => {
+        const id = b.id || b.room_id || '';
+        return !id.startsWith('world_boss_') && b.event_id !== 'world_boss_vadar';
+      });
+
+      if (!eventBosses.length) {
+        logWarn('Tidak ada Event Boss khusus (selain World Boss) yang aktif saat ini.');
+        logInfo('Tips: Anda dapat menjalankan mode Hunting House permanen menggunakan:');
+        logInfo('  node bot.js --hunting');
+        return;
+      }
+
+      const eligible = eventBosses.map((b) => {
+        const def = defMap.get(b.id) || {};
+        return {
+          id: b.id,
+          name: def.name || b.name || b.id,
+          level: Number(def.encounter_level || b.level || 10),
+          event_id: b.event_id,
+        };
+      }).filter((b) => b.level <= charLevel);
+
+      const chosen = eligible.length ? eligible[eligible.length - 1] : eventBosses[0];
+      targetBossId = chosen.id;
+      const chosenDef = defMap.get(chosen.id);
+      logInfo(`Mode "auto": memilih Event Boss "${chosenDef?.name || chosen.name || targetBossId}" (Room: ${targetBossId}, Lv ${chosen.level ?? 10})`);
+    } else {
+      const catalog = await client.fetchHuntingCatalog().catch(() => null);
+      const rooms = (catalog?.definitions || []).filter((r) => r.venue === 'hunting');
+      if (!rooms.length) {
+        logWarn('Tidak ada room hunting yang ditemukan.');
+        return;
+      }
+      const eligible = rooms.filter((r) => Number(r.encounter_level || r.level || 10) <= charLevel);
+      const chosen = eligible.length ? eligible[eligible.length - 1] : rooms[0];
+      targetBossId = chosen.id;
+      logInfo(`Mode "auto": memilih Hunting Boss "${chosen.name || targetBossId}" (Room: ${targetBossId}, Lv ${chosen.encounter_level || chosen.level})`);
+    }
+  }
+
+  logInfo(`Target Room/Boss ID: ${targetBossId}`);
+  logInfo(`Mode Pertarungan   : ${isHuntingMode ? 'Hunting House' : 'Event Boss'}`);
+  logInfo('------------------------------------------------------------');
+
+  let totalRuns = 0;
+  let totalWins = 0;
+
+  while (maxRuns <= 0 || totalRuns < maxRuns) {
+    if (!isHuntingMode) {
+      const stam = await client.fetchEventStamina().catch(() => null);
+      if (stam && (stam.stamina != null || stam.current != null)) {
+        const cur = Number(stam.stamina ?? stam.current);
+        const cost = Number(stam.cost || 20);
+        logInfo(`Event Stamina saat ini: ${cur}/${stam.max ?? 100}`);
+        if (cur < cost) {
+          if (autoRefillStamina) {
+            logInfo('Event stamina kurang, mencoba refill stamina via event_refill_stamina...');
+            await client.refillEventStamina(generateRequestId());
+            logSuccess('Refill event stamina berhasil!');
+          } else {
+            logWarn(`Event stamina tidak cukup (${cur} < ${cost}). Berhenti farming.`);
+            break;
+          }
+        }
+      }
+    }
+
+    totalRuns++;
+    const runLabel = `${isHuntingMode ? 'Hunt' : 'EventBoss'} #${totalRuns}`;
+    logInfo(`--- [${runLabel}] Menantang room "${targetBossId}"... ---`);
+
+    try {
+      const startResp = await client.startHunt(targetBossId);
+      const { receipt, verdict, grant } = await executeBattleSession(
+        client,
+        startResp,
+        tacticalPlan,
+        { minDelaySec, maxDelaySec, label: runLabel }
+      );
+
+      if (verdict === 'win') {
+        totalWins++;
+        const xp = grant.xp_granted || grant.xp || 0;
+        const gold = grant.wallet?.gold ?? grant.gold ?? 0;
+        const items = grant.items || grant.drops || grant.reward_items || [];
+        let itemsStr = '';
+        if (Array.isArray(items) && items.length) {
+          itemsStr = ` | Drops: ${items.map((it) => (typeof it === 'object' ? `${it.id} x${it.qty || 1}` : it)).join(', ')}`;
+        }
+        logSuccess(
+          `[${runLabel}] MENANG! +${Number(xp).toLocaleString('id-ID')} XP` +
+          (gold ? ` | Gold: ${Number(gold).toLocaleString('id-ID')}` : '') +
+          itemsStr
+        );
+      } else {
+        logWarn(`[${runLabel}] Pertarungan selesai dengan status: ${verdict}`);
+      }
+    } catch (err) {
+      logError(`[${runLabel}] Kesalahan: ${err.message}`);
+      if (err.payload) logError(`Server payload: ${JSON.stringify(err.payload)}`);
+      break;
+    }
+
+    if (maxRuns <= 0 || totalRuns < maxRuns) {
+      const pauseSec = randomInt(cooldownMinSec, cooldownMaxSec);
+      logInfo(`Istirahat ${pauseSec} detik sebelum pertarungan berikutnya...`);
+      await sleep(pauseSec * 1000);
+    }
+  }
+
+  logSuccess(`Selesai farming! Total run: ${totalRuns}, Menang: ${totalWins}`);
+}
+
+
+// ============================================================================
 // CLI Entrypoint
 // ============================================================================
 function parseArgs(argv) {
@@ -938,20 +1503,44 @@ function parseArgs(argv) {
     testSim: false,
     status: false,
     listMissions: false,
+    listBosses: false,
+    wbStatus: false,
+    worldBoss: false,
+    eventBoss: false,
+    hunting: false,
     loginGoogle: false,
     callbackUrl: null,
     missionId: null,
+    bossId: null,
     maxRuns: null,
+    autoClaim: false,
+    autoRefill: false,
+    mode: null,
   };
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === '--test-sim' || arg === '--test') {
+    if (arg === '--help' || arg === '-h') {
+      opts.help = true;
+    } else if (arg === '--test-sim' || arg === '--test') {
       opts.testSim = true;
     } else if (arg === '--status') {
       opts.status = true;
     } else if (arg === '--list-missions') {
       opts.listMissions = true;
+    } else if (arg === '--list-bosses' || arg === '--bosses') {
+      opts.listBosses = true;
+    } else if (arg === '--wb-status' || arg === '--world-boss-status') {
+      opts.wbStatus = true;
+    } else if (arg === '--world-boss' || arg === '--wb') {
+      opts.worldBoss = true;
+      opts.mode = 'wb';
+    } else if (arg === '--event-boss' || arg === '--event') {
+      opts.eventBoss = true;
+      opts.mode = 'event';
+    } else if (arg === '--hunting' || arg === '--hunt') {
+      opts.hunting = true;
+      opts.mode = 'hunting';
     } else if (arg === '--login-google' || arg === '--login') {
       opts.loginGoogle = true;
       if (argv[i + 1] && !argv[i + 1].startsWith('--')) {
@@ -959,8 +1548,14 @@ function parseArgs(argv) {
       }
     } else if (arg === '--mission' && argv[i + 1]) {
       opts.missionId = argv[++i];
+    } else if (arg === '--boss' && argv[i + 1]) {
+      opts.bossId = argv[++i];
     } else if (arg === '--runs' && argv[i + 1]) {
       opts.maxRuns = Number(argv[++i]);
+    } else if (arg === '--auto-claim') {
+      opts.autoClaim = true;
+    } else if (arg === '--auto-refill') {
+      opts.autoRefill = true;
     }
   }
   return opts;
@@ -984,6 +1579,39 @@ function loadConfig() {
 async function main() {
   const cliOptions = parseArgs(process.argv.slice(2));
 
+  if (cliOptions.help) {
+    console.log(`
+Ninja Horizon AFK Farming Bot (Misi, World Boss, Event Boss)
+
+Penggunaan:
+  node bot.js [opsi]
+
+Opsi Umum & Akun:
+  --help, -h               Tampilkan bantuan ini
+  --login-google           Login SSO Google via browser lokal
+  --status                 Tampilkan status profil, stamina, dan koin
+  --test-sim               Jalankan pengujian offline mesin simulasi Oracle
+
+Farming Misi (AFK EXP):
+  --list-missions          Tampilkan daftar misi dan status clears
+  --mission <id>           Tentukan ID misi (default: "auto")
+  --runs <jumlah>          Jumlah ronde yang ingin dijalankan (default: sesuai config)
+
+Farming World Boss:
+  --wb-status              Tampilkan status World Boss, sisa tiket, & milestone
+  --wb, --world-boss       Jalankan bot mode World Boss (menghabiskan tiket)
+  --auto-claim             Klaim milestone World Boss yang tercapai secara otomatis
+  --auto-refill            Beli refill tiket World Boss menggunakan token jika habis
+
+Farming Event Boss & Hunting:
+  --list-bosses, --bosses  Tampilkan katalog Event Boss & Hunting House
+  --event, --event-boss    Jalankan bot mode Event Boss
+  --hunting, --hunt        Jalankan bot mode Hunting House permanen
+  --boss <id>              Tentukan ID bos / room (default: rekomendasi otomatis)
+`);
+    return;
+  }
+
   if (cliOptions.testSim) {
     runOfflineSimulationTest();
     return;
@@ -1002,12 +1630,38 @@ async function main() {
     return;
   }
 
+  if (cliOptions.wbStatus) {
+    await showWorldBossStatus(client);
+    return;
+  }
+
   if (cliOptions.listMissions) {
     await listMissions(client);
     return;
   }
 
-  await runAfkBot(client, config, cliOptions);
+  if (cliOptions.listBosses) {
+    await listBosses(client);
+    return;
+  }
+
+  const selectedMode =
+    cliOptions.mode ||
+    (cliOptions.worldBoss ? 'wb' : null) ||
+    (cliOptions.eventBoss ? 'event' : null) ||
+    (cliOptions.hunting ? 'hunting' : null) ||
+    config.mode ||
+    'mission';
+
+  if (selectedMode === 'wb' || selectedMode === 'world_boss') {
+    await runWorldBossBot(client, config, cliOptions);
+  } else if (selectedMode === 'event' || selectedMode === 'event_boss') {
+    await runEventBossBot(client, config, cliOptions, 'event');
+  } else if (selectedMode === 'hunting') {
+    await runEventBossBot(client, config, cliOptions, 'hunting');
+  } else {
+    await runAfkBot(client, config, cliOptions);
+  }
 }
 
 main().catch((err) => {

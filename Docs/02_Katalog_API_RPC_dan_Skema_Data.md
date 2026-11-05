@@ -74,12 +74,23 @@ Berikut adalah daftar fungsi di *Game Service Layer* beserta nama RPC / tabel Su
 | `setNameColor` (`9564`) | RPC `set_name_color` | `{"p_color": <id>}` (`shape 5854`) |
 | `readStaticTable` | Tabel statis di cache/Supabase | `skill_defs`, `gear_defs`, `gear_set_defs`, `item_defs`, `pet_defs`, `enemy_defs`, `talent_defs`, `senjutsu_defs`, `senjutsu_skill_defs`, `mission_board_defs`, `gear_gender_pairs` |
 
-### 3.2 Misi, Special Mission, Exam, & Hunting House
+### 3.2 Misi, Special Mission, Exam, World Boss, & Event Boss / Hunting House
 | Fungsi JS (`fid`) | Target RPC / Tabel Supabase | Parameter Input (`Shape`) |
 | :--- | :--- | :--- |
 | `listMissions` (`9463` / `23315`) | RPC `mission_board_progress_state` + `mission_board_defs` | - |
 | `startMission` (`9474` / `23326`) | RPC `mission_start` | `{"p_mission": <mission_id>}` (`shape 5812`) |
 | `fetchMissionEconomy` (`23579`) | Tabel `game_config` (`.eq('key', 'mission_economy')`) | - |
+| `fetchWorldBossState` (`9181` / `22870`) | RPC `world_boss_state` | - (Mengembalikan `week_id`, `available`, `milestones`, `ranking_rewards`, `boss`, `player`) |
+| `startWorldBoss` (`9182` / `22871`) | RPC `world_boss_start` | `{"p_week_id": <week_id>, "p_request_id": <uuid>}` |
+| `refillWorldBoss` (`9183` / `22872`) | RPC `world_boss_refill` | `{"p_request_id": <uuid>}` |
+| `claimWorldBossMilestone` (`9184` / `22873`) | RPC `world_boss_claim` | `{"p_week_id": <week_id>, "p_milestone": <id>}` |
+| `fetchWorldBossRankings` (`9185` / `22874`) | RPC `world_boss_rankings` | `{"p_week_id": <week_id>, "p_page": <int>}` |
+| `fetchEventsSurfaceState` (`22877`) | RPC `events_surface_state` | - (Mengembalikan `events`, `storefronts`, `bosses`) |
+| `fetchEventStamina` (`22715`) | RPC `event_stamina` | - |
+| `refillEventStamina` (`22716`) | RPC `event_refill_stamina` | - |
+| `fetchHuntingCatalog` (`29089`) | RPC `hunting_catalog_state` | - (Katalog monster/bos permanen) |
+| `fetchHuntingPlayerPayload` (`9535` / `23366`) | RPC `hunting_player_state` | - (Status room dan limit pemain) |
+| `huntStart` (`9537` / `22684` / `23368`) | RPC `hunt_start` | `{"p_room": <room_or_boss_id>}` (`shape 5840`) |
 | `fetchExamState` (`9464` / `23316`) | RPC `exam_player_state` | `{"p_rank": <rank>}` (`shape 5808`) |
 | `chooseSpecialClassJutsu` (`9465` / `23317`) | RPC `exam_special_class_choose` | `{"p_skill": <skill_id>}` (`shape 5810`) |
 | `resetSpecialClass` (`9466` / `23318`) | RPC `exam_special_class_reset` | - |

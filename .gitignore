@@ -9,7 +9,9 @@ bot/daily.json
 *.apk
 *.aab
 *.bundle
+*.bundle.*
 *.hbc
+assets/
 bot/oracle_bytecode.bin
 bot/oracle_meta.json
 bot/legacy_apk_engines/

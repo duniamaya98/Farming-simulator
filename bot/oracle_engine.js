@@ -3,39 +3,62 @@
 const fs = require("fs");
 const path = require("path");
 
-const META = JSON.parse(
-  fs.readFileSync(path.join(__dirname, "oracle_meta.json"), "utf8")
-);
-const BC = fs.readFileSync(path.join(__dirname, "oracle_bytecode.bin"));
-
-const STRINGS = META.opcodes ? META.strings : [];
-const OPCODES = META.opcodes;
-const FUNCTIONS = META.functions;
-const OBJ_TEMPLATES = META.objTemplates;
-const ARR_TEMPLATES = META.arrTemplates;
-const SWITCH_TABLES = META.switchTables;
+let META = null;
+let BC = null;
+let STRINGS = [];
+let OPCODES = null;
+let FUNCTIONS = null;
+let OBJ_TEMPLATES = null;
+let ARR_TEMPLATES = null;
+let SWITCH_TABLES = null;
 
 const SHAPE_KEYS_SYM = Symbol("hbcShapeKeys");
 const EMPTY_SENTINEL = Symbol("hbcEmpty");
 const UNDEF_MARKER = "__HBC_UNDEFINED__";
 
-// Pre-convert UNDEF_MARKER in templates to actual undefined
-for (const key of Object.keys(OBJ_TEMPLATES)) {
-  const vs = OBJ_TEMPLATES[key][1];
-  for (let i = 0; i < vs.length; i++) {
-    if (vs[i] === UNDEF_MARKER) vs[i] = undefined;
+function ensureLoaded() {
+  if (META) return;
+  const metaPath = path.join(__dirname, "oracle_meta.json");
+  const bcPath = path.join(__dirname, "oracle_bytecode.bin");
+  if (!fs.existsSync(metaPath) || !fs.existsSync(bcPath)) {
+    throw new Error(
+      `File bytecode Oracle tidak ditemukan:
+` +
+      `  - ${metaPath}
+` +
+      `  - ${bcPath}
+` +
+      `File proprietary ini tidak disertakan di git. Jalankan ekstraksi dari bundle Hermes game terlebih dahulu.`
+    );
   }
-}
-for (const key of Object.keys(ARR_TEMPLATES)) {
-  const vs = ARR_TEMPLATES[key];
-  for (let i = 0; i < vs.length; i++) {
-    if (vs[i] === UNDEF_MARKER) vs[i] = undefined;
+  META = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+  BC = fs.readFileSync(bcPath);
+  STRINGS = META.opcodes ? META.strings : [];
+  OPCODES = META.opcodes;
+  FUNCTIONS = META.functions;
+  OBJ_TEMPLATES = META.objTemplates;
+  ARR_TEMPLATES = META.arrTemplates;
+  SWITCH_TABLES = META.switchTables;
+
+  // Pre-convert UNDEF_MARKER in templates to actual undefined
+  for (const key of Object.keys(OBJ_TEMPLATES)) {
+    const vs = OBJ_TEMPLATES[key][1];
+    for (let i = 0; i < vs.length; i++) {
+      if (vs[i] === UNDEF_MARKER) vs[i] = undefined;
+    }
+  }
+  for (const key of Object.keys(ARR_TEMPLATES)) {
+    const vs = ARR_TEMPLATES[key];
+    for (let i = 0; i < vs.length; i++) {
+      if (vs[i] === UNDEF_MARKER) vs[i] = undefined;
+    }
   }
 }
 
 const DECODED_FUNCS = new Map();
 
 function decodeFunction(fid) {
+  ensureLoaded();
   let cached = DECODED_FUNCS.get(fid);
   if (cached) return cached;
 
