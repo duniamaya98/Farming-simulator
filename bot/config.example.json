@@ -3,8 +3,12 @@
   "password": "",
   "refreshToken": "",
   "accessToken": "",
+  "mode": "mission",
   "missionId": "auto",
   "autoPlan": true,
+  "bossId": "auto",
+  "autoClaimMilestones": true,
+  "autoRefill": false,
   "minDelaySeconds": 8,
   "maxDelaySeconds": 15,
   "betweenMissionMinSeconds": 4,
@@ -13,4 +17,3 @@
   "maxRuns": 0,
   "maxWinsPerDay": 0
 }
-

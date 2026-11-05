@@ -218,3 +218,143 @@ Aplikasi asli memperbarui dirinya lewat **HotUpdater OTA** (`https://updates.nin
 
 ### 6.3 Pemilihan misi otomatis
 Dengan `"missionId": "auto"` (default baru), bot membaca level dari `player_avatar` dan memilih misi non-exam dengan XP tertinggi dari `mission_defs` yang levelnya ≤ level karakter. Lihat kandidatnya dengan `node bot.js --list-missions`.
+
+
+---
+
+## 7. Fitur Baru: Farming World Boss & Event Boss
+
+### 7.1 Mekanisme World Boss
+World Boss berjalan secara mingguan (`week_id`) dan menggunakan sistem tiket harian:
+- **Status & Info**: RPC `world_boss_state` mengembalikan info bos aktif, tiket tersisa (`tickets`), waktu reset, serta daftar milestone hadiah skor mingguan (`milestones`).
+- **Memulai Pertarungan**: RPC `world_boss_start` dengan parameter `{"p_week_id": weekId, "p_request_id": uuid()}`. RPC ini menghasilkan `session.id` yang langsung dihubungkan ke Edge Function `/functions/v1/resolve-battle`.
+- **Eksekusi Battle**: Bot melakukan simulasi giliran via `oracle_engine.js`, menghitung damage akumulatif terhadap boss, dan mengirimkan receipt ke server dengan jeda waktu realistis.
+- **Auto Claim Milestones**: Jika flag `--auto-claim` diaktifkan, bot secara otomatis memanggil RPC `world_boss_claim` untuk setiap milestone skor yang sudah terpenuhi namun belum diklaim (`claimed: false`).
+
+**Contoh Perintah World Boss:**
+```powershell
+# Cek sisa tiket, HP/level bos, dan milestone mingguan
+node bot.js --wb-status
+
+# Habiskan seluruh tiket World Boss hari ini
+node bot.js --wb
+
+# Habiskan 2 tiket World Boss dan klaim milestone yang tercapai
+node bot.js --wb --runs 2 --auto-claim
+```
+
+### 7.2 Mekanisme Event Boss & Hunting House
+Event Boss terintegrasi dengan modul Hunting House (`hunt_start`):
+- **Status & Katalog Event**: Bot mengambil data bos event via RPC `events_surface_state` dan `hunting_catalog_state`.
+- **Pengecekan Stamina**: Memeriksa ketersediaan stamina event via RPC `event_stamina`.
+- **Memulai Pertarungan**: RPC `hunt_start` dengan parameter `{"p_room": roomId}`.
+- **Eksekusi Battle**: Menggunakan pipeline yang sama (`resolve-battle` -> `oracle_engine` -> `resolve-battle`), memastikan drop material event terkumpul secara otomatis.
+
+**Contoh Perintah Event Boss:**
+```powershell
+# Lihat daftar event boss aktif dan katalog monster hunting
+node bot.js --list-bosses
+
+# Serang event boss yang direkomendasikan otomatis
+node bot.js --event
+
+# Serang event boss spesifik sebanyak 3 ronde
+node bot.js --event --boss-id evt_boss_1 --runs 3
+```
+
+
+### 7.3 Mekanisme Auto Hunting House (Kari Badges)
+Hunting House merupakan dungeon permanen pemburu monster (`venue: "hunting"`):
+- **Syarat Level**: Minimal **Level 10** (`feature_gates.hunting: 10`). Server melempar `PTLOCK:hunting:10` jika karakter belum mencapai Lv 10.
+- **Mata Uang Entry**: Menggunakan **Kari Badge** (`item_509`). Biaya masuk standar 5 Kari Badges, menang mengembalikan 1 Badge (`game_config.kari_badge_economy`). Pemain mendapatkan 10 Badges gratis setiap hari.
+- **Pemilihan Room Otomatis (`--hunting`)**: Bot otomatis memilih monster dengan rank dan hadiah tertinggi yang memenuhi syarat level karakter (`encounter_level <= avatar.level`):
+  - Lv 10: *Hunter's Forest* (`hunt_ginkotsu`)
+  - Lv 20: *Third Laboratory* (`hunt_yanki`)
+  - Lv 25: *Sealing Stone Vault* (`hunt_gedo`)
+  - Lv 30: *Tengu Roost* (`hunt_tengu`)
+  - Lv 40: *Byakko's Den* (`hunt_byakko`)
+  - Lv 50: *Ape Mountain* (`hunt_apeking`)
+  - Lv 55: *Northern Shoals* (`hunt_turtle`)
+  - Lv 60: *Samu Village Ruins* (`hunt_mutoh`)
+
+**Contoh Perintah Hunting House:**
+```powershell
+# Cek saldo Kari Badge dan daftar room yang terbuka
+node bot.js --hunt-status
+
+# Farming otomatis room tertinggi sesuai level
+node bot.js --hunting
+
+# Farming room spesifik sebanyak 5 ronde
+node bot.js --hunting --room hunt_ginkotsu --runs 5
+```
+
+### 7.4 Mekanisme Auto Eudemon Garden (Taman Makhluk Mistis)
+Eudemon Garden merupakan pertarungan tingkat lanjut (`venue: "eudemon"`):
+- **Hadiah**: Memberikan EXP sangat tinggi (20.000 s.d 75.000 XP per pertarungan) dan material senjata khusus untuk *Garden Forge*.
+- **Syarat Level**: Minimal **Level 10** (`encounter_level` berkisar antara Lv 10 hingga Lv 80).
+- **Pemilihan Room Otomatis (`--eudemon`)**: Bot otomatis mencocokkan level karakter ke room terbaik:
+  - Lv 10: *Kamaitachi Garden* (`eudemon_kamaitachi` - 20k XP)
+  - Lv 20: *Hell Horse Garden* (`eudemon_hell_horse` - 23k XP)
+  - Lv 25: *Kabutomushi Musha Garden* (`eudemon_kabutomushi` - 25k XP)
+  - Lv 30: *Kinkaku & Ginkaku Garden* (`eudemon_kinkaku_ginkaku` - 30k XP)
+  - Lv 40: *Thunder Eagle Garden* (`eudemon_thunder_eagle` - 35k XP)
+  - Lv 50: *Mammoth King Garden* (`eudemon_mammoth_king` - 38k XP)
+  - Lv 55: *Oceans Queen Garden* (`eudemon_oceans_queen` - 40k XP)
+  - Lv 60: *Ghost Soldier Garden* (`eudemon_ghost_soldier` - 48k XP)
+  - Lv 70: *Battle Angel Garden* (`eudemon_battle_angel` - 56k XP)
+  - Lv 80: *Infernal Chimera Garden* (`eudemon_infernal_chimera` - 75k XP)
+
+**Contoh Perintah Eudemon Garden:**
+```powershell
+# Farming otomatis room Eudemon Garden terbaik
+node bot.js --eudemon
+
+# Farming room spesifik sebanyak 3 ronde
+node bot.js --eudemon --room eudemon_kamaitachi --runs 3
+```
+
+---
+
+## 8. Mode Shinobi Tower (Tower of Trials)
+
+Shinobi Tower adalah mode panjat menara mingguan tanpa batas (*infinite climb*) di mana setiap 5 lantai dijaga oleh musuh elit dan setiap 10 lantai dijaga oleh bos penjaga menara.
+
+### 8.1 Mekanisme & Protokol RPC Shinobi Tower
+Dari hasil reverse engineering bundle Hermes (modul `useTower`, FID `809`, FID `9212`, FID `22907`):
+- **`tower_state`**: Mengambil status menara pemain saat ini, termasuk `record_floor`, `best_floor`, `week_id`, `rank`, `sweep`, dan daftar `milestones`.
+- **`tower_start`**: Memulai pertarungan menara dengan parameter `{ p_week_id, p_floor }`. Mengembalikan sesi pertarungan yang dieksekusi menggunakan mesin Oracle Edge Function (`/functions/v1/resolve-battle`).
+- **`tower_sweep`**: Menyapu lantai instan dengan parameter `{ p_week_id }` hingga target sweep minggu lalu (`sweep.target`).
+- **`tower_rankings`**: Mengambil peringkat mingguan pemain global (`p_week_id`, `p_page`, `p_page_size`).
+- **Syarat Fitur**: Karakter minimal **Level 10** (`feature_gates.tower: 10`).
+
+### 8.2 Fitur Auto-Climb & Auto-Sweep Bot
+Bot menyediakan otomatisasi pendakian bertahap:
+1. **Pendeteksian Lantai Otomatis**: Bot mendeteksi posisi `record_floor` akun dan langsung menantang lantai berikutnya (`record_floor + 1`).
+2. **Pacing Realistis**: Mengikuti ritme pertempuran asli (700–950 ms per turn) agar terhindar dari deteksi bot atau timeout.
+3. **Pemberhentian Cerdas**: Bot otomatis berhenti jika:
+   - Mengalami kekalahan pada lantai yang sulit.
+   - Telah mencapai target lantai (`--target-floor <lantai>`).
+   - Telah menyelesaikan kuota pendakian (`--max-floors <jumlah>`).
+4. **Auto-Sweep**: Menjalankan sweep instan sebelum pendakian dimulai jika opsi `--auto-sweep` disertakan.
+
+### 8.3 Contoh Perintah Penggunaan Shinobi Tower
+```powershell
+# 1. Cek status rekor lantai, rank mingguan, dan lawan lantai berikutnya
+node bot.js --tower-status
+
+# 2. Daki menara secara otomatis lantai demi lantai tanpa batas (sampai kalah)
+node bot.js --tower
+
+# 3. Daki menara dengan target berhenti di lantai tertentu (mis. lantai 80)
+node bot.js --tower --target-floor 80
+
+# 4. Batasi pendakian maksimal 5 lantai dalam satu sesi
+node bot.js --tower --max-floors 5
+
+# 5. Jalankan sweep hadiah instan jika tersedia
+node bot.js --tower-sweep
+
+# 6. Jalankan sweep terlebih dahulu kemudian lanjutkan auto-climb
+node bot.js --tower --auto-sweep
+```
