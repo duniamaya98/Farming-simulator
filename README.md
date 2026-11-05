@@ -10,7 +10,7 @@ Repo ini berisi hasil investigasi reverse engineering (REA) terhadap aplikasi *N
 | Path | Isi |
 | --- | --- |
 | `Docs/` | Laporan investigasi, katalog API/RPC, analisis mesin pertarungan, panduan bot |
-| `bot/bot.js` | CLI bot (login SSO Google, status, farming Misi, World Boss, Hunting House, Eudemon Garden, & Event Boss) |
+| `bot/bot.js` | CLI bot (login SSO Google, status, farming Misi, World Boss, Hunting House, Eudemon Garden, Shinobi Tower, & Auto Exam) |
 | `bot/oracle_engine.js` | Interpreter bytecode Hermes v98 untuk menjalankan mesin pertarungan |
 | `bot/extract_oracle.py` | Script ekstraksi bytecode & metadata Oracle dari bundle Hermes |
 | `bot/config.example.json` | Template konfigurasi |
@@ -61,4 +61,11 @@ node bot.js --tower --max-floors 5     # batasi pendakian maksimal 5 lantai
 node bot.js --tower --target-floor 80  # berhenti setelah mencapai lantai target
 node bot.js --tower-sweep    # klaim instan hadiah sweep jika tersedia
 node bot.js --tower --auto-sweep       # otomatis lakukan sweep sebelum mulai memanjat
+
+# 7. Ujian Promosi Ninja (Auto Exam Lv 20, 40, 60, & 80)
+node bot.js --exam-status    # cek status kelulusan ujian semua rank (Chunin, Jounin, Sp. Jounin, Tutor)
+node bot.js --exam           # jalankan ujian promosi otomatis sesuai level karakter saat ini
+node bot.js --exam --track tensai   # ambil jalur Tensai (Talented track)
+node bot.js --exam-level 20  # paksa jalankan ujian tingkatan tertentu (20, 40, 60, atau 80)
+# Bot AFK EXP secara otomatis mendeteksi saat karakter mencapai Lv 20, 40, 60, 80 dan menjalankan ujian promosi tanpa intervensi manual!
 ```

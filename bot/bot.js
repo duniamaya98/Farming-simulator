@@ -490,6 +490,43 @@ class NinjaHorizonClient {
     });
   }
 
+  async fetchExamPlayerState(rank = 'genin') {
+    return await this.rpc('exam_player_state', {
+      p_rank: rank,
+    });
+  }
+
+  async fetchExamQuiz(missionId) {
+    return await this.rpc('exam_quiz_get', {
+      p_mission: missionId,
+    });
+  }
+
+  async submitExamQuiz(missionId, answers) {
+    return await this.rpc('exam_quiz_submit', {
+      p_mission: missionId,
+      p_answers: answers,
+    });
+  }
+
+  async startExamMinigame(missionId) {
+    return await this.rpc('exam_minigame_start', {
+      p_mission: missionId,
+    });
+  }
+
+  async clearExamMinigame(missionId) {
+    return await this.rpc('exam_minigame_clear', {
+      p_mission: missionId,
+    });
+  }
+
+  async chooseSpecialClassJutsu(skillId) {
+    return await this.rpc('exam_special_class_choose', {
+      p_skill: skillId,
+    });
+  }
+
   /**
    * Mengambil build awal pertarungan dari `/functions/v1/resolve-battle` (`mode: "start"`).
    */
@@ -1107,8 +1144,23 @@ async function runAfkBot(client, config, cliOptions) {
   if (pol) logInfo(`Engine kompatibel dengan server: ${pol.usable.join(', ')} (server active: ${pol.policy.active})`);
 
   // 2) Data avatar, auto-plan & pemilihan misi otomatis
-  const avatar = await client.fetchAvatar().catch(() => null);
+  let avatar = await client.fetchAvatar().catch(() => null);
   let lastXp = avatar ? Number(avatar.xp) : null;
+
+  // Auto Exam Check saat memulai bot jika level sudah mencapai cap (20, 40, 60, 80)
+  const shouldAutoExam = config.autoExam !== false || cliOptions.autoExam;
+  if (shouldAutoExam && avatar && [20, 40, 60, 80].includes(avatar.level)) {
+    logInfo(`[Auto Exam] Karakter berada di Level ${avatar.level}. Memeriksa status kelulusan ujian promosi...`);
+    const examPassed = await runExamBot(client, config, {
+      silentNoExam: true,
+      track: cliOptions.track || config.examTrack,
+    });
+    if (examPassed) {
+      avatar = (await client.fetchAvatar().catch(() => null)) || avatar;
+      lastXp = avatar ? Number(avatar.xp) : lastXp;
+    }
+  }
+
   const tacticalPlan = autoPlan && avatar?.auto_plan && typeof avatar.auto_plan === 'object' ? avatar.auto_plan : null;
   if (String(missionId).toLowerCase() === 'auto') {
     const best = await pickBestMission(client, avatar?.level ?? 1);
@@ -1248,6 +1300,31 @@ async function runAfkBot(client, config, cliOptions) {
           ` | Level: ${currentLevel}${leveledUp ? ' (LEVEL UP!)' : ''}` +
           ` | Kemenangan Hari Ini: ${winsToday}/${softCapLimit}`
         );
+
+        // Auto Exam Trigger saat mencapai level 20, 40, 60, 80 atau EXP tertahan (level cap)
+        const numericLvl = Number(currentLevel);
+        const hitCapLevel = [20, 40, 60, 80].includes(numericLvl);
+        if (shouldAutoExam && hitCapLevel && (leveledUp || xpAwarded === 0)) {
+          logInfo(`[Auto Exam] Terdeteksi Level ${numericLvl} (level cap). Menjalankan ujian promosi ninja otomatis...`);
+          const examSuccess = await runExamBot(client, config, {
+            silentNoExam: true,
+            track: cliOptions.track || config.examTrack,
+          });
+          if (examSuccess) {
+            logSuccess(`[Auto Exam] Ujian promosi selesai! Memperbarui data karakter & misi...`);
+            const freshAvatar = await client.fetchAvatar().catch(() => null);
+            if (freshAvatar) {
+              avatar = freshAvatar;
+              if (String(cliOptions.missionId || config.missionId || 'auto').toLowerCase() === 'auto') {
+                const best = await pickBestMission(client, freshAvatar.level);
+                if (best.length) {
+                  missionId = best[0].id;
+                  logInfo(`[Auto Exam] Target misi otomatis dialihkan ke ${best[0].id} "${best[0].name}" (Lv ${best[0].level})`);
+                }
+              }
+            }
+          }
+        }
       } else {
         logWarn(
           `[Run #${totalRuns}] Pertarungan berakhir dengan verdict: ${verdict}. ` +
@@ -1805,6 +1882,239 @@ async function runTowerBot(client, config, cliOptions) {
   logSuccess(`Selesai sesi Shinobi Tower! Total lantai didaki: ${climbedCount}, Menang: ${totalWins}. Posisi sekarang: Lantai ${currentFloor - 1}`);
 }
 
+// ============================================================================
+// Mode Ujian Kenaikan Tingkat Ninja (Auto Exam: Level 20, 40, 60, & 80)
+// ============================================================================
+const EXAM_RANKS = [
+  {
+    level: 20,
+    rank: 'genin',
+    nextRank: 'chunin',
+    name: 'Chunin Exam (Level 20)',
+    desc: 'Membuka Pet Centre & Level Cap 40',
+    normalMissions: ['msn55', 'msn56', 'msn57', 'msn58', 'msn59'],
+    talentedMissions: ['msn815', 'msn816', 'msn817', 'msn818', 'msn819'],
+  },
+  {
+    level: 40,
+    rank: 'chunin',
+    nextRank: 'jounin',
+    name: 'Jounin Exam (Level 40)',
+    desc: 'Membuka Fitur Talents & Level Cap 60',
+    normalMissions: ['msn132', 'msn133', 'msn134', 'msn135', 'msn136'],
+    talentedMissions: ['msn823', 'msn820', 'msn824', 'msn821', 'msn822'],
+  },
+  {
+    level: 60,
+    rank: 'jounin',
+    nextRank: 'special_jounin',
+    name: 'Special Jounin Exam (Level 60)',
+    desc: 'Membuka Special Jounin Class Jutsu & Level Cap 80',
+    normalMissions: ['msn227', 'msn229', 'msn231', 'msn233', 'msn235', 'msn236', 'msn237', 'msn238'],
+    talentedMissions: ['msn205', 'msn206', 'msn207', 'msn208', 'msn209', 'msn210', 'msn211', 'msn212'],
+  },
+  {
+    level: 80,
+    rank: 'special_jounin',
+    nextRank: 'tutor',
+    name: 'Ninja Tutor Exam (Level 80)',
+    desc: 'Membuka Senjutsu (Sage Arts) & Level Cap 100',
+    normalMissions: ['msn252', 'msn253', 'msn254', 'msn255', 'msn256', 'msn257', 'msn258'],
+    talentedMissions: ['msn259', 'msn260', 'msn261', 'msn262', 'msn263', 'msn264', 'msn265'],
+  },
+];
+
+async function showExamStatus(client) {
+  logInfo('Mengambil data status ujian promosi ninja dari server...');
+  const avatar = await client.fetchAvatar().catch(() => null);
+  const geninState = await client.fetchExamPlayerState('genin').catch(() => null);
+  const clears = new Set(geninState?.clears || []);
+
+  console.log('\n============================================================');
+  console.log('STATUS UJIAN PROMOSI NINJA (LEVEL 20, 40, 60, 80)');
+  console.log('============================================================');
+
+  if (avatar?.name) {
+    console.log(`Karakter         : ${avatar.name} (Lv ${avatar.level || '?'}, Pangkat: ${avatar.rank ? avatar.rank.toUpperCase() : 'GENIN'})`);
+  }
+
+  for (const ex of EXAM_RANKS) {
+    const normalDone = ex.normalMissions.filter((m) => clears.has(m)).length;
+    const talentedDone = ex.talentedMissions.filter((m) => clears.has(m)).length;
+    const isPassed = normalDone === ex.normalMissions.length || talentedDone === ex.talentedMissions.length;
+
+    console.log(`\n--- [Lv ${ex.level}] ${ex.name} -> PANGKAT ${ex.nextRank.toUpperCase()} ---`);
+    console.log(`Manfaat          : ${ex.desc}`);
+    console.log(`Status Kelulusan : ${isPassed ? '✓ LULUS (CLEARED)' : '✕ BELUM LULUS'}`);
+    console.log(`Track Normal     : ${normalDone}/${ex.normalMissions.length} stage selesai [${ex.normalMissions.join(', ')}]`);
+    console.log(`Track Tensai     : ${talentedDone}/${ex.talentedMissions.length} stage selesai [${ex.talentedMissions.join(', ')}]`);
+  }
+  console.log('============================================================\n');
+}
+
+async function solveExamQuiz(client, missionId) {
+  logInfo(`[Quiz] Mengambil soal kuis ujian (${missionId})...`);
+  const quizData = await client.fetchExamQuiz(missionId).catch((e) => {
+    logWarn(`Gagal mengambil kuis via exam_quiz_get: ${e.message}`);
+    return null;
+  });
+
+  let answers = [];
+  if (quizData && Array.isArray(quizData.questions)) {
+    logInfo(`[Quiz] Ditemukan ${quizData.questions.length} pertanyaan kuis.`);
+    answers = quizData.questions.map((q) => (q.correct_index != null ? q.correct_index : 0));
+  }
+
+  logInfo(`[Quiz] Mengirim lembar jawaban untuk misi ${missionId}...`);
+  const submitRes = await client.submitExamQuiz(missionId, answers).catch(async (err) => {
+    logWarn(`Submit quiz pertama gagal (${err.message}), mencoba payload alternatif...`);
+    return await client.submitExamQuiz(missionId, { answers });
+  });
+
+  logSuccess(`[Quiz] Ujian kuis (${missionId}) selesai diproses! Hasil: ${JSON.stringify(submitRes)}`);
+  return submitRes;
+}
+
+async function solveExamMinigame(client, missionId, trialKind) {
+  logInfo(`[Minigame] Memulai minigame "${trialKind}" (${missionId})...`);
+  await client.startExamMinigame(missionId).catch((e) => logWarn(`Minigame start: ${e.message}`));
+
+  const waitMs = randomInt(2500, 4000);
+  logInfo(`[Minigame] Menyelesaikan tantangan segel/kekkai (${(waitMs / 1000).toFixed(1)}s)...`);
+  await sleep(waitMs);
+
+  const clearRes = await client.clearExamMinigame(missionId);
+  logSuccess(`[Minigame] Berhasil menyelesaikan minigame "${trialKind}" (${missionId})!`);
+  return clearRes;
+}
+
+async function runExamBot(client, config, cliOptions = {}) {
+  logInfo('============================================================');
+  logInfo('NINJA HORIZON — AUTO EXAM PROMOTION BOT (HEADLESS)');
+  logInfo('============================================================');
+
+  const avatar = await client.fetchAvatar().catch((err) => {
+    if (err.message && err.message.includes('Karakter belum dibuat')) throw err;
+    return null;
+  });
+
+  const charLevel = Number(avatar?.level || 1);
+  const charRank = String(avatar?.rank || 'genin').toLowerCase();
+
+  let targetExam = null;
+  const requestedLevel = Number(cliOptions.examLevel || config.examLevel || 0);
+
+  if (requestedLevel > 0) {
+    targetExam = EXAM_RANKS.find((e) => e.level === requestedLevel);
+  } else {
+    if (charRank === 'genin' || (charLevel >= 20 && charRank === 'genin')) {
+      targetExam = EXAM_RANKS.find((e) => e.rank === 'genin');
+    } else if (charRank === 'chunin' || (charLevel >= 40 && charRank === 'chunin')) {
+      targetExam = EXAM_RANKS.find((e) => e.rank === 'chunin');
+    } else if (charRank === 'jounin' || (charLevel >= 60 && charRank === 'jounin')) {
+      targetExam = EXAM_RANKS.find((e) => e.rank === 'jounin');
+    } else if (charRank === 'special_jounin' || (charLevel >= 80 && charRank === 'special_jounin')) {
+      targetExam = EXAM_RANKS.find((e) => e.rank === 'special_jounin');
+    }
+  }
+
+  if (!targetExam) {
+    if (!cliOptions.silentNoExam) {
+      logWarn(
+        `Karakter Anda (${avatar?.name || 'Ninja'}, Lv ${charLevel}, Pangkat: ${charRank.toUpperCase()}) ` +
+        `belum memenuhi syarat ujian promosi berikutnya, atau sudah mencapai pangkat tertinggi.`
+      );
+    }
+    return false;
+  }
+
+  const trackMode = String(cliOptions.track || config.examTrack || 'normal').toLowerCase();
+  const isTalented = trackMode === 'talented' || trackMode === 'tensai';
+  const stageMissions = isTalented ? targetExam.talentedMissions : targetExam.normalMissions;
+
+  logInfo(`Karakter          : ${avatar?.name || 'Ninja'} (Lv ${charLevel}, ${charRank.toUpperCase()})`);
+  logInfo(`Ujian Promosi     : ${targetExam.name} -> Pangkat ${targetExam.nextRank.toUpperCase()}`);
+  logInfo(`Jalur (Track)     : ${isTalented ? 'Tensai / Talented' : 'Normal'}`);
+  logInfo(`Total Stage       : ${stageMissions.length} tahap [${stageMissions.join(', ')}]`);
+  logInfo('------------------------------------------------------------');
+
+  const state = await client.fetchExamPlayerState(targetExam.rank).catch(() => null);
+  const clears = new Set(state?.clears || []);
+  const defsMap = new Map((state?.definitions || []).map((d) => [d.id, d]));
+
+  let stagesCleared = 0;
+  const tacticalPlan = config.tacticalPlan !== false;
+  const minDelaySec = Number(config.minDelaySeconds ?? 5);
+  const maxDelaySec = Number(config.maxDelaySeconds ?? 10);
+  const cooldownMinSec = Number(config.betweenMissionMinSeconds ?? 3);
+  const cooldownMaxSec = Number(config.betweenMissionMaxSeconds ?? 6);
+
+  for (let idx = 0; idx < stageMissions.length; idx++) {
+    const missionId = stageMissions[idx];
+    const stageNum = idx + 1;
+    const def = defsMap.get(missionId) || { id: missionId, name: `Stage ${stageNum}` };
+
+    if (clears.has(missionId)) {
+      logInfo(`[Stage ${stageNum}/${stageMissions.length}] ${missionId} "${def.name}" sudah pernah di-clear. Melewati...`);
+      stagesCleared++;
+      continue;
+    }
+
+    const stageLabel = `Exam ${targetExam.nextRank.toUpperCase()} [${stageNum}/${stageMissions.length}]`;
+    logInfo(`--- [${stageLabel}] Memulai "${def.name}" (${missionId})... ---`);
+
+    try {
+      if (def.trial_kind === 'quiz') {
+        await solveExamQuiz(client, missionId);
+        clears.add(missionId);
+        stagesCleared++;
+      } else if (def.trial_kind === 'handseals' || def.trial_kind === 'kekkai') {
+        await solveExamMinigame(client, missionId, def.trial_kind);
+        clears.add(missionId);
+        stagesCleared++;
+      } else {
+        const sessionResp = await client.startMission(missionId);
+        const { verdict } = await executeBattleSession(
+          client,
+          sessionResp,
+          tacticalPlan,
+          { minDelaySec, maxDelaySec, label: stageLabel }
+        );
+
+        if (verdict === 'win') {
+          logSuccess(`[${stageLabel}] MENANG! Berhasil menaklukkan stage "${def.name}"!`);
+          clears.add(missionId);
+          stagesCleared++;
+        } else {
+          logWarn(`[${stageLabel}] Pertarungan kalah atau terhenti (verdict: ${verdict}). Berhenti sementara.`);
+          return false;
+        }
+      }
+    } catch (err) {
+      logError(`[${stageLabel}] Kesalahan: ${err.message}`);
+      if (err.payload) logError(`Server payload: ${JSON.stringify(err.payload)}`);
+      return false;
+    }
+
+    if (idx < stageMissions.length - 1) {
+      const pauseSec = randomInt(cooldownMinSec, cooldownMaxSec);
+      logInfo(`Istirahat ${pauseSec} detik sebelum stage ujian berikutnya...`);
+      await sleep(pauseSec * 1000);
+    }
+  }
+
+  const updatedAvatar = await client.fetchAvatar().catch(() => null);
+  const newRank = updatedAvatar?.rank ? updatedAvatar.rank.toUpperCase() : targetExam.nextRank.toUpperCase();
+
+  logSuccess('\n============================================================');
+  logSuccess(`SELAMAT! Anda telah menyelesaikan ${targetExam.name}!`);
+  logSuccess(`Pangkat Baru : ${newRank}`);
+  logSuccess(`Manfaat      : ${targetExam.desc}`);
+  logSuccess('============================================================\n');
+  return true;
+}
+
+
 
 
 // ============================================================================
@@ -1826,6 +2136,11 @@ function parseArgs(argv) {
     towerStatus: false,
     towerSweep: false,
     autoSweep: false,
+    exam: false,
+    autoExam: false,
+    examStatus: false,
+    track: null,
+    examLevel: null,
     targetFloor: null,
     maxFloors: null,
     loginGoogle: false,
@@ -1875,6 +2190,15 @@ function parseArgs(argv) {
       opts.towerSweep = true;
     } else if (arg === '--auto-sweep') {
       opts.autoSweep = true;
+    } else if (arg === '--exam' || arg === '--auto-exam') {
+      opts.exam = true;
+      opts.mode = 'exam';
+    } else if (arg === '--exam-status') {
+      opts.examStatus = true;
+    } else if (arg === '--track' && argv[i + 1]) {
+      opts.track = argv[++i];
+    } else if ((arg === '--exam-level' || arg === '--exam-rank') && argv[i + 1]) {
+      opts.examLevel = Number(argv[++i]);
     } else if ((arg === '--target-floor' || arg === '--floor') && argv[i + 1]) {
       opts.targetFloor = Number(argv[++i]);
     } else if (arg === '--max-floors' && argv[i + 1]) {
@@ -1956,6 +2280,12 @@ Farming Shinobi Tower (Tower of Trials):
   --target-floor <lantai>  Tentukan lantai target akhir untuk berhenti (contoh: --target-floor 80)
   --max-floors <jumlah>    Batas maksimal jumlah lantai yang dinaiki dalam satu kali sesi
   --auto-sweep             Lakukan sweep otomatis sebelum memulai pendakian lantai
+
+Ujian Kenaikan Tingkat (Auto Exam Lv 20, 40, 60, 80):
+  --exam-status            Tampilkan status kelulusan ujian semua tingkatan pangkat
+  --exam, --auto-exam      Jalankan ujian promosi ninja secara otomatis sesuai level
+  --track <normal|tensai>  Pilih jalur ujian: 'normal' atau 'tensai' / 'talented' (default: normal)
+  --exam-level <20|40|60|80> Paksa menjalankan ujian untuk tingkatan level tertentu
 `);
     return;
   }
@@ -2008,8 +2338,14 @@ Farming Shinobi Tower (Tower of Trials):
     return;
   }
 
+  if (cliOptions.examStatus) {
+    await showExamStatus(client);
+    return;
+  }
+
   const selectedMode =
     cliOptions.mode ||
+    (cliOptions.exam ? 'exam' : null) ||
     (cliOptions.worldBoss ? 'wb' : null) ||
     (cliOptions.eventBoss ? 'event' : null) ||
     (cliOptions.hunting ? 'hunting' : null) ||
@@ -2018,7 +2354,9 @@ Farming Shinobi Tower (Tower of Trials):
     config.mode ||
     'mission';
 
-  if (selectedMode === 'wb' || selectedMode === 'world_boss') {
+  if (selectedMode === 'exam') {
+    await runExamBot(client, config, cliOptions);
+  } else if (selectedMode === 'wb' || selectedMode === 'world_boss') {
     await runWorldBossBot(client, config, cliOptions);
   } else if (selectedMode === 'event' || selectedMode === 'event_boss') {
     await runHuntBot(client, config, cliOptions, 'event');
@@ -2046,5 +2384,8 @@ module.exports = {
   showTowerStatus,
   sweepTowerAction,
   runTowerBot,
+  showExamStatus,
+  runExamBot,
+  EXAM_RANKS,
 };
 

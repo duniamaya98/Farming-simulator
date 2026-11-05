@@ -358,3 +358,52 @@ node bot.js --tower-sweep
 # 6. Jalankan sweep terlebih dahulu kemudian lanjutkan auto-climb
 node bot.js --tower --auto-sweep
 ```
+
+---
+
+## 9. Panduan Ujian Promosi Ninja (Auto Exam: Level 20, 40, 60, & 80)
+
+Ujian Promosi (*Rank Promotion Exam*) adalah mekanisme inti Ninja Horizon untuk menaikkan pangkat ninja, membuka batas level (*level cap*), serta membuka fitur-fitur lanjutan game.
+
+### 9.1 Struktur Tingkatan Ujian & Manfaat Promosi
+Jika ninja telah mencapai batas level di bawah ini, EXP akan terhenti (*level cap blocked*) sampai pemain lulus seluruh tahapan ujian pada tingkatan tersebut:
+
+| Level | Pangkat Asal | Pangkat Promosi | Batas Cap Baru | Fitur Terbuka | Misi Track Normal | Misi Track Tensai |
+|---|---|---|---|---|---|---|
+| **Lv 20** | Genin | **Chunin** | Lv 40 | Pet Centre (Peliharaan Ninja) | `msn55` s/d `msn59` (5 stage) | `msn815` s/d `msn819` (5 stage) |
+| **Lv 40** | Chunin | **Jounin** | Lv 60 | Sistem Talents Ninja | `msn132` s/d `msn136` (5 stage) | `msn823`, `msn820`, `msn824`, dll (5 stage) |
+| **Lv 60** | Jounin | **Special Jounin** | Lv 80 | Special Class Jutsu | `msn227` s/d `msn238` (8 stage) | `msn205` s/d `msn212` (8 stage) |
+| **Lv 80** | Special Jounin | **Ninja Tutor** | Lv 100 | Senjutsu (Sage Arts) | `msn252` s/d `msn258` (7 stage) | `msn259` s/d `msn265` (7 stage) |
+
+### 9.2 Protokol RPC & Variasi Stage Ujian
+Berdasarkan reverse engineering bundle Hermes (modul `useRankExam`, FID `788`, `22631–22637`, `26438`, `27620`):
+1. **`exam_player_state`**: Memeriksa daftar stage yang telah diselesaikan (`clears`), level cap, dan track aktif via `{ p_rank: rank }`.
+2. **Tahap Kuis (`trial_kind: "quiz"`)**:
+   - `exam_quiz_get` (`{ p_mission }`): Mengambil daftar soal kuis ninja tertulis.
+   - `exam_quiz_submit` (`{ p_mission, p_answers }`): Mengirim lembar jawaban untuk verifikasi server.
+3. **Tahap Minigame Segel / Kekkai (`trial_kind: "handseals" | "kekkai"`)**:
+   - `exam_minigame_start` (`{ p_mission }`): Memulai sesi minigame.
+   - `exam_minigame_clear` (`{ p_mission }`): Menyelesaikan tantangan segel tangan atau formasi kekkai.
+4. **Tahap Pertarungan Ujian (Solo & Team Battle)**:
+   - Dijalankan via `mission_start` dan diselesaikan secara deterministik oleh mesin Oracle Edge Function (`/functions/v1/resolve-battle`).
+
+### 9.3 Otomatisasi Terintegrasi pada Bot AFK EXP
+Bot headless telah mengintegrasikan fitur ujian promosi ini secara penuh ke dalam loop `runAfkBot`:
+- **Pengecekan Awal**: Saat bot dijalankan, jika level avatar adalah 20, 40, 60, atau 80, bot langsung memeriksa kelulusan ujian sebelum mulai farming.
+- **Pemicu Naik Level (Auto Trigger)**: Begitu karakter naik level ke 20, 40, 60, atau 80 (atau saat menang tapi mendapat 0 EXP karena cap), bot secara otomatis beralih ke mode ujian dan menuntaskan semua stage yang belum di-clear.
+- **Pembaruan Misi Pasca-Promosi**: Setelah lulus dan cap terbuka, bot menyegarkan data avatar dan otomatis mengalihkan target misi AFK ke misi ber-EXP tertinggi pada level baru.
+
+### 9.4 Contoh Perintah Penggunaan Ujian Promosi
+```powershell
+# 1. Cek status kelulusan seluruh tingkatan ujian promosi
+node bot.js --exam-status
+
+# 2. Jalankan ujian promosi ninja secara otomatis sesuai level karakter saat ini
+node bot.js --exam
+
+# 3. Jalankan ujian promosi menggunakan jalur Tensai (Talented Track)
+node bot.js --exam --track tensai
+
+# 4. Paksa menjalankan ujian untuk level tertentu (contoh: Level 20 Chunin Exam)
+node bot.js --exam-level 20
+```

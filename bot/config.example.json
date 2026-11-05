@@ -14,6 +14,8 @@
   "betweenMissionMinSeconds": 4,
   "betweenMissionMaxSeconds": 9,
   "stopOnSoftCap": true,
+  "autoExam": true,
+  "examTrack": "normal",
   "maxRuns": 0,
   "maxWinsPerDay": 0
 }
