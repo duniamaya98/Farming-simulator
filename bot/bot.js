@@ -700,17 +700,6 @@ async function checkEnginePolicy(client) {
   return { policy, usable };
 }
 
-/** Memilih misi non-exam dengan XP tertinggi yang levelnya <= level avatar. */
-async function pickBestMission(client, level) {
-  const rows = await client.rest(
-    `mission_defs?select=id,name,grade,level,xp,gold&is_exam=eq.false&has_battle=eq.true` +
-    `&level=lte.${level}&order=xp.desc,level.desc&limit=5`
-  );
-  return rows || [];
-}
-
-// ============================================================================
-
 // ============================================================================
 // Eksekutor Sesi Pertarungan Bersama (Misi, World Boss, Event Boss, Hunting)
 // ============================================================================
@@ -769,6 +758,149 @@ async function executeBattleSession(client, sessionResp, tacticalPlan, options =
   return { sessionId, build, receipt, verdict, grant, clientDiag, actions };
 }
 
+/**
+ * Mengambil status lengkap papan misi pemain (clears & misi yang terkunci / terbuka).
+ */
+async function fetchMissionBoardStatus(client, avatarLevel = 1) {
+  const progress = await client.rpc('mission_board_progress_state').catch(() => ({ clears: [] }));
+  const clears = new Set(progress?.clears || []);
+
+  const boardMissions = await client.rest(
+    'mission_defs?is_exam=eq.false&has_battle=eq.true&board_order=not.is.null&order=board_order.asc'
+  );
+
+  const orderMap = new Map();
+  for (const m of boardMissions) {
+    orderMap.set(m.board_order, m);
+  }
+
+  const decorated = boardMissions.map((m) => {
+    const isCleared = clears.has(m.id);
+    const prevMission = m.board_order > 1 ? orderMap.get(m.board_order - 1) : null;
+    const isUnlocked = m.board_order === 1 || (prevMission && clears.has(prevMission.id));
+    const isPlayable = isUnlocked && m.level <= avatarLevel;
+
+    let status = 'PROGRESS_LOCKED';
+    if (isCleared) status = 'CLEARED';
+    else if (isUnlocked && m.level <= avatarLevel) status = 'AVAILABLE';
+    else if (isUnlocked && m.level > avatarLevel) status = 'LEVEL_LOCKED';
+
+    return { ...m, isCleared, isUnlocked, isPlayable, status };
+  });
+
+  const availableNewMissions = decorated.filter((m) => m.status === 'AVAILABLE');
+  const clearedMissions = decorated
+    .filter((m) => m.status === 'CLEARED' && m.level <= avatarLevel)
+    .sort((a, b) => b.xp - a.xp);
+
+  return {
+    clears,
+    boardMissions: decorated,
+    orderMap,
+    availableNewMissions,
+    clearedMissions,
+  };
+}
+
+/**
+ * Memilih misi terbaik untuk dijalankan bot AFK:
+ * 1. Jika ada misi baru yang sudah terbuka di papan misi (AVAILABLE), prioritaskan untuk membuka jalan.
+ * 2. Jika semua misi untuk level karakter sudah selesai, pilih misi CLEARED dengan XP tertinggi untuk farming.
+ */
+async function pickBestMission(client, level) {
+  const boardStatus = await fetchMissionBoardStatus(client, level);
+
+  // Jika ada misi baru yang belum di-clear dan level memenuhi syarat, prioritaskan progression
+  if (boardStatus.availableNewMissions.length > 0) {
+    return [boardStatus.availableNewMissions[0]];
+  }
+
+  // Jika semua misi sudah terbuka, pilih misi cleared dengan XP tertinggi
+  if (boardStatus.clearedMissions.length > 0) {
+    return boardStatus.clearedMissions;
+  }
+
+  // Fallback darurat
+  const rows = await client.rest(
+    `mission_defs?select=id,name,grade,level,xp,gold,board_order&is_exam=eq.false&has_battle=eq.true` +
+    `&level=lte.${level}&order=board_order.asc&limit=5`
+  );
+  return rows || [];
+}
+
+/**
+ * Memvalidasi apakah misi manual terkunci, dan secara otomatis menyelesaikan misi prasyarat
+ * jika pengguna menentukan misi spesifik yang belum terbuka di server.
+ */
+async function validateAndPrepareMission(client, missionId, avatarLevel, tacticalPlan, battleOptions = {}) {
+  const rows = await client.rest(`mission_defs?id=eq.${missionId}`);
+  if (!rows || rows.length === 0) {
+    return { ok: false, reason: `Misi ID "${missionId}" tidak ditemukan di database.` };
+  }
+  const targetDef = rows[0];
+
+  if (targetDef.level > avatarLevel) {
+    return {
+      ok: false,
+      reason: `Misi "${targetDef.name}" (${missionId}) membutuhkan Level ${targetDef.level}, sedangkan karakter Anda masih Level ${avatarLevel}.`,
+    };
+  }
+
+  const boardStatus = await fetchMissionBoardStatus(client, avatarLevel);
+  if (boardStatus.clears.has(missionId)) {
+    return { ok: true, missionDef: targetDef };
+  }
+
+  if (targetDef.board_order != null) {
+    const missing = boardStatus.boardMissions.filter(
+      (m) => m.board_order < targetDef.board_order && !boardStatus.clears.has(m.id)
+    );
+
+    if (missing.length === 0) {
+      return { ok: true, missionDef: targetDef };
+    }
+
+    logWarn(`Misi target "${targetDef.name}" (${missionId}) masih terkunci oleh server!`);
+    logInfo(`Ditemukan ${missing.length} misi prasyarat yang belum diselesaikan: ${missing.map((m) => `${m.id} "${m.name}"`).join(', ')}`);
+    logInfo('Menyelesaikan misi prasyarat secara berurutan terlebih dahulu...');
+
+    for (const prereq of missing) {
+      if (prereq.level > avatarLevel) {
+        return {
+          ok: false,
+          reason: `Misi prasyarat "${prereq.name}" (${prereq.id}) membutuhkan Level ${prereq.level} (level karakter belum cukup).`,
+        };
+      }
+
+      logInfo(`--- [Prasyarat] Memulai "${prereq.name}" (${prereq.id}) ---`);
+      const sessionResp = await client.startMission(prereq.id);
+      const { verdict } = await executeBattleSession(client, sessionResp, tacticalPlan, {
+        minDelaySec: battleOptions.minDelaySec || 5,
+        maxDelaySec: battleOptions.maxDelaySec || 10,
+        label: `Prereq ${prereq.id}`,
+      });
+
+      if (verdict === 'win') {
+        logSuccess(`[Prasyarat] Berhasil menyelesaikan ${prereq.id} "${prereq.name}"!`);
+        boardStatus.clears.add(prereq.id);
+      } else {
+        return {
+          ok: false,
+          reason: `Gagal menyelesaikan misi prasyarat ${prereq.id} "${prereq.name}" (verdict: ${verdict}).`,
+        };
+      }
+
+      const pauseSec = randomInt(battleOptions.cooldownMinSec || 3, battleOptions.cooldownMaxSec || 6);
+      logInfo(`Istirahat ${pauseSec} detik sebelum misi berikutnya...`);
+      await sleep(pauseSec * 1000);
+    }
+
+    logSuccess(`Semua misi prasyarat telah selesai! Misi "${targetDef.name}" (${missionId}) sekarang terbuka.`);
+  }
+
+  return { ok: true, missionDef: targetDef };
+}
+
 // Mode Status & Daftar Misi (`--status`, `--list-missions`)
 // ============================================================================
 async function showStatus(client) {
@@ -823,12 +955,47 @@ async function showStatus(client) {
 async function listMissions(client) {
   const avatar = await client.fetchAvatar();
   const level = avatar?.level ?? 1;
-  logInfo(`Misi dengan XP tertinggi untuk Lv ${level}:`);
-  const rows = await client.rest(
-    `mission_defs?select=id,name,grade,level,xp,gold&is_exam=eq.false&has_battle=eq.true` +
-    `&level=lte.${level}&order=xp.desc,level.desc&limit=15`
-  );
-  console.table(rows);
+  const boardStatus = await fetchMissionBoardStatus(client, level);
+
+  console.log('\n============================================================');
+  console.log(`STATUS PAPAN MISI CERITA (KARAKTER: ${avatar?.name || 'Ninja'}, LV ${level})`);
+  console.log('============================================================');
+
+  const relevantMissions = boardStatus.boardMissions
+    .filter((m) => m.level <= level + 2)
+    .slice(0, 20)
+    .map((m) => ({
+      ID: m.id,
+      Nama: m.name,
+      Level: m.level,
+      XP: m.xp.toLocaleString('id-ID'),
+      Gold: m.gold.toLocaleString('id-ID'),
+      Urutan: m.board_order,
+      Status:
+        m.status === 'CLEARED'
+          ? '✓ CLEARED'
+          : m.status === 'AVAILABLE'
+          ? '★ UNLOCKED (BARU)'
+          : m.status === 'LEVEL_LOCKED'
+          ? '🔒 LV KURANG'
+          : '🔒 PROGRESS LOCKED',
+    }));
+
+  console.table(relevantMissions);
+
+  console.log('\n=== Misi Terbaik untuk Farming XP (Sudah Selesai/Cleared) ===');
+  if (boardStatus.clearedMissions.length > 0) {
+    const topCleared = boardStatus.clearedMissions.slice(0, 5).map((m) => ({
+      ID: m.id,
+      Nama: m.name,
+      Level: m.level,
+      XP: m.xp.toLocaleString('id-ID'),
+      Gold: m.gold.toLocaleString('id-ID'),
+    }));
+    console.table(topCleared);
+  } else {
+    logInfo('Belum ada misi yang di-clear untuk farming.');
+  }
 }
 
 async function showWorldBossStatus(client) {
@@ -1161,12 +1328,27 @@ async function runAfkBot(client, config, cliOptions) {
     }
   }
 
+  const isAutoMission = !cliOptions.missionId || String(cliOptions.missionId).toLowerCase() === 'auto';
   const tacticalPlan = autoPlan && avatar?.auto_plan && typeof avatar.auto_plan === 'object' ? avatar.auto_plan : null;
-  if (String(missionId).toLowerCase() === 'auto') {
+
+  if (isAutoMission) {
     const best = await pickBestMission(client, avatar?.level ?? 1);
     if (!best.length) throw new Error('Tidak menemukan misi yang cocok untuk level karakter.');
     missionId = best[0].id;
-    logInfo(`Mode misi "auto": memilih ${best[0].id} "${best[0].name}" (Lv ${best[0].level}, ${best[0].xp.toLocaleString('id-ID')} XP)`);
+    const kindDesc = best[0].status === 'AVAILABLE' ? 'misi cerita baru (progression)' : 'misi farming XP terbaik';
+    logInfo(`Mode misi "auto": memilih ${kindDesc} -> ${best[0].id} "${best[0].name}" (Lv ${best[0].level}, ${best[0].xp.toLocaleString('id-ID')} XP)`);
+  } else {
+    logInfo(`Mode misi manual: memeriksa status kunci untuk "${missionId}"...`);
+    const prep = await validateAndPrepareMission(client, missionId, avatar?.level ?? 1, tacticalPlan, {
+      minDelaySec,
+      maxDelaySec,
+      cooldownMinSec,
+      cooldownMaxSec,
+    });
+    if (!prep.ok) {
+      logError(prep.reason);
+      return;
+    }
   }
 
   // 3) Batas harian (gold soft-cap dari game_config.mission_economy)
@@ -1323,6 +1505,21 @@ async function runAfkBot(client, config, cliOptions) {
                 }
               }
             }
+          }
+        }
+
+        // Jika dalam mode auto misi, periksa apakah ada misi baru berikutnya di papan misi yang terbuka
+        if (isAutoMission) {
+          const freshAvatar = await client.fetchAvatar().catch(() => null);
+          const currentLvl = freshAvatar?.level ?? Number(currentLevel) ?? avatar?.level ?? 1;
+          const best = await pickBestMission(client, currentLvl);
+          if (best.length && best[0].id !== missionId) {
+            const kindDesc = best[0].status === 'AVAILABLE' ? 'misi cerita baru berikutnya' : 'misi farming XP tertinggi';
+            logInfo(
+              `[Auto Progress] Papan misi berkembang! Target dialihkan ke ${kindDesc} -> ` +
+              `${best[0].id} "${best[0].name}" (Lv ${best[0].level}, ${best[0].xp.toLocaleString('id-ID')} XP)`
+            );
+            missionId = best[0].id;
           }
         }
       } else {
