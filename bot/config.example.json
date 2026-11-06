@@ -16,6 +16,7 @@
   "stopOnSoftCap": true,
   "autoExam": true,
   "examTrack": "normal",
+  "trainingMode": "all",
   "maxRuns": 0,
   "maxWinsPerDay": 0
 }

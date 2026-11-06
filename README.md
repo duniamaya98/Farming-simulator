@@ -10,7 +10,7 @@ Repo ini berisi hasil investigasi reverse engineering (REA) terhadap aplikasi *N
 | Path | Isi |
 | --- | --- |
 | `Docs/` | Laporan investigasi, katalog API/RPC, analisis mesin pertarungan, panduan bot |
-| `bot/bot.js` | CLI bot (login SSO Google, status, farming Misi, World Boss, Hunting House, Eudemon Garden, Shinobi Tower, & Auto Exam) |
+| `bot/bot.js` | CLI bot (login SSO Google, status, farming Misi, World Boss, Hunting House, Eudemon Garden, Shinobi Tower, Auto Exam, TP & SS Training) |
 | `bot/oracle_engine.js` | Interpreter bytecode Hermes v98 untuk menjalankan mesin pertarungan |
 | `bot/extract_oracle.py` | Script ekstraksi bytecode & metadata Oracle dari bundle Hermes |
 | `bot/config.example.json` | Template konfigurasi |
@@ -68,4 +68,10 @@ node bot.js --exam           # jalankan ujian promosi otomatis sesuai level kara
 node bot.js --exam --track tensai   # ambil jalur Tensai (Talented track)
 node bot.js --exam-level 20  # paksa jalankan ujian tingkatan tertentu (20, 40, 60, atau 80)
 # Bot AFK EXP secara otomatis mendeteksi saat karakter mencapai Lv 20, 40, 60, 80 dan menjalankan ujian promosi tanpa intervensi manual!
+
+# 8. Special Training Harian (TP Training & SS Training)
+node bot.js --training-status # cek saldo TP & Senjutsu Spirit serta penawaran training hari ini
+node bot.js --tp             # selesaikan seluruh TP Training harian otomatis (Talent Points, Lv 40+)
+node bot.js --ss             # selesaikan seluruh SS Training harian otomatis (Senjutsu Spirit, Lv 80+)
+node bot.js --training       # jalankan seluruh Special Training yang tersedia (TP & SS sekaligus)
 ```

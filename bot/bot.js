@@ -527,6 +527,32 @@ class NinjaHorizonClient {
     });
   }
 
+  // ==========================================================================
+  // Special Missions (TP Training & SS Training) RPCs (func[22821] - func[22824])
+  // ==========================================================================
+  async fetchSpecialMissionState() {
+    return await this.rpc('special_mission_state');
+  }
+
+  async startSpecialMission(missionId) {
+    return await this.rpc('special_mission_start', {
+      p_mission: missionId,
+    });
+  }
+
+  async completeSpecialMission(sessionId, proof) {
+    return await this.rpc('special_mission_complete', {
+      p_session: sessionId,
+      p_proof: proof,
+    });
+  }
+
+  async failSpecialMission(sessionId) {
+    return await this.rpc('special_mission_fail', {
+      p_session: sessionId,
+    });
+  }
+
   /**
    * Mengambil build awal pertarungan dari `/functions/v1/resolve-battle` (`mode: "start"`).
    */
@@ -2311,6 +2337,316 @@ async function runExamBot(client, config, cliOptions = {}) {
   return true;
 }
 
+// ============================================================================
+// Special Training Bot (TP Training & SS Training)
+// ============================================================================
+
+/**
+ * Membangun payload bukti penyelesaian tantangan (p_proof) minigame Special Mission.
+ * Diekstrak dari analisis Hermes Bytecode:
+ * - memory_pairs: { success: true, completed: pairs }
+ * - mastermind  : { success: true, completed: stages.length }
+ * - skill_memory: { success: true, completed: round_lengths.length }
+ * - balance     : { success: true, completed: targets.length }
+ * - lights_out  : { success: true, completed: 1 }
+ */
+function buildChallengeProof(challengeKind, challengeConfig) {
+  const challenge = challengeConfig || {};
+  let completedVal = 1;
+  switch (challengeKind) {
+    case 'memory_pairs':
+      completedVal = Number(challenge.pairs) || 4;
+      break;
+    case 'mastermind':
+      completedVal = Array.isArray(challenge.stages)
+        ? challenge.stages.length
+        : Number(challenge.stages) || 1;
+      break;
+    case 'skill_memory':
+      completedVal = Array.isArray(challenge.round_lengths)
+        ? challenge.round_lengths.length
+        : 3;
+      break;
+    case 'balance':
+      completedVal = Array.isArray(challenge.targets)
+        ? challenge.targets.length
+        : 1;
+      break;
+    case 'lights_out':
+      completedVal = 1;
+      break;
+    default:
+      completedVal = 1;
+  }
+  return {
+    success: true,
+    completed: completedVal,
+  };
+}
+
+/**
+ * Menampilkan status saldo & daftar Special Mission harian (Talent Points & Senjutsu Spirit).
+ */
+async function showSpecialMissionStatus(client) {
+  logInfo('Mengambil status Special Training (TP & Senjutsu Spirit) dari server...');
+  try {
+    const [state, avatar] = await Promise.all([
+      client.fetchSpecialMissionState().catch((e) => ({ error: e.message })),
+      client.fetchAvatar().catch(() => null),
+    ]);
+
+    if (state.error) {
+      logError(`Gagal mengambil status special mission: ${state.error}`);
+      return;
+    }
+
+    const tpBalance = state.talent_points ?? avatar?.talent_points ?? 0;
+    const ssBalance = state.senjutsu_spirit ?? avatar?.senjutsu_spirit ?? 0;
+    const tpMax = state.tp_daily_max ?? 30;
+    const ssMax = state.spirit_daily_max ?? 150;
+
+    const missions = state.missions || [];
+    const tpMissions = missions.filter((m) => m.training_kind === 'talent_point');
+    const ssMissions = missions.filter((m) => m.training_kind === 'senjutsu_spirit');
+
+    const tpCompletedToday = tpMissions.filter((m) => m.completed).length;
+    const ssCompletedToday = ssMissions.filter((m) => m.completed).length;
+
+    console.log('\n============================================================');
+    console.log('NINJA HORIZON — STATUS SPECIAL TRAINING (TP & SENJUTSU SPIRIT)');
+    console.log('============================================================');
+    logInfo(`Karakter         : ${avatar ? `${avatar.name} (Lv ${avatar.level}, ${avatar.rank})` : 'Terautentikasi'}`);
+    logInfo(`Tanggal Server   : ${state.day || new Date().toISOString().split('T')[0]}`);
+    console.log('------------------------------------------------------------');
+    logInfo(`Saldo TP (Talent Points) : ${tpBalance.toLocaleString('id-ID')} TP`);
+    logInfo(`Progress TP Hari Ini     : ${tpCompletedToday * 10}/${tpMax} TP (${tpCompletedToday}/3 misi selesai)`);
+    console.log('------------------------------------------------------------');
+    logInfo(`Saldo Senjutsu Spirit    : ${ssBalance.toLocaleString('id-ID')} Spirit`);
+    logInfo(`Progress Spirit Hari Ini : ${ssCompletedToday * 30}/${ssMax} Spirit (${ssCompletedToday}/5 misi selesai)`);
+    console.log('============================================================');
+
+    console.log('\n=== Talent Points Training (Syarat: Pangkat Jounin / Level 40+) ===');
+    if (tpMissions.length > 0) {
+      console.table(
+        tpMissions.map((m) => {
+          let statusDesc = 'TIDAK AKTIF HARI INI';
+          if (m.completed) statusDesc = 'SELESAI';
+          else if (m.locked) statusDesc = `TERKUNCI (${m.lock_text || `Lv ${m.level_req}`})`;
+          else if (m.offered) statusDesc = 'TERSEDIA';
+
+          return {
+            ID: m.id,
+            Name: m.name,
+            Challenge: m.challenge_kind,
+            Reward: `+${m.reward_amount || 10} TP`,
+            Gold: Number(m.gold || 0).toLocaleString('id-ID'),
+            Status: statusDesc,
+          };
+        })
+      );
+    } else {
+      logInfo('Tidak ada data misi Talent Points.');
+    }
+
+    console.log('\n=== Senjutsu Spirit Training (Syarat: Pangkat Tutor / Level 80+) ===');
+    if (ssMissions.length > 0) {
+      console.table(
+        ssMissions.map((m) => {
+          let statusDesc = 'TIDAK AKTIF HARI INI';
+          if (m.completed) statusDesc = 'SELESAI';
+          else if (m.locked) statusDesc = `TERKUNCI (${m.lock_text || `Lv ${m.level_req}`})`;
+          else if (m.offered) statusDesc = 'TERSEDIA';
+
+          return {
+            ID: m.id,
+            Name: m.name,
+            Challenge: m.challenge_kind,
+            Reward: `+${m.reward_amount || 30} Spirit`,
+            Gold: Number(m.gold || 0).toLocaleString('id-ID'),
+            Status: statusDesc,
+          };
+        })
+      );
+    } else {
+      logInfo('Tidak ada data misi Senjutsu Spirit.');
+    }
+  } catch (err) {
+    logError(`Gagal mengambil status special training: ${err.message}`);
+  }
+}
+
+/**
+ * Menjalankan otomatisasi penyelesaian training harian (TP Training, SS Training, atau keduanya).
+ *
+ * @param {NinjaHorizonClient} client
+ * @param {object} config
+ * @param {object} cliOptions
+ * @param {'all'|'tp'|'ss'} trainingMode
+ */
+async function runTrainingBot(client, config, cliOptions, trainingMode = 'all') {
+  const modeKey = (cliOptions.trainingMode || trainingMode || 'all').toLowerCase();
+  const isTpOnly = modeKey === 'tp' || modeKey === 'talent_point';
+  const isSsOnly = modeKey === 'ss' || modeKey === 'senjutsu_spirit' || modeKey === 'sage';
+
+  let title = 'AUTO SPECIAL TRAINING (TP & SENJUTSU SPIRIT)';
+  if (isTpOnly) title = 'AUTO TALENT POINTS TRAINING (TP)';
+  else if (isSsOnly) title = 'AUTO SENJUTSU SPIRIT TRAINING (SS)';
+
+  logInfo('============================================================');
+  logInfo(`NINJA HORIZON — ${title}`);
+  logInfo('============================================================');
+
+  const avatar = await client.fetchAvatar().catch(() => null);
+  if (avatar) {
+    logInfo(`Karakter : ${avatar.name} (Lv ${avatar.level}, ${avatar.rank})`);
+  }
+
+  const userLevel = Number(avatar?.level || 1);
+  if (isTpOnly && userLevel < 40) {
+    logWarn(`Karakter Anda berada di Level ${userLevel}. TP Training baru terbuka pada Level 40 (Rank Jounin).`);
+    return;
+  }
+  if (isSsOnly && userLevel < 80) {
+    logWarn(`Karakter Anda berada di Level ${userLevel}. SS Training baru terbuka pada Level 80 (Rank Tutor).`);
+    return;
+  }
+
+  logInfo('Mengambil penawaran Special Mission hari ini dari server...');
+  const state = await client.fetchSpecialMissionState();
+  if (!state || !Array.isArray(state.missions)) {
+    throw new Error('Gagal memuat status Special Mission dari server.');
+  }
+
+  logInfo(`Saldo Awal : ${state.talent_points ?? avatar?.talent_points ?? 0} TP | ${state.senjutsu_spirit ?? avatar?.senjutsu_spirit ?? 0} Senjutsu Spirit`);
+
+  // Filter misi yang relevan
+  let eligibleMissions = state.missions.filter((m) => {
+    if (isTpOnly) return m.training_kind === 'talent_point';
+    if (isSsOnly) return m.training_kind === 'senjutsu_spirit';
+    return true; // 'all'
+  });
+
+  const pendingMissions = eligibleMissions.filter((m) => m.offered && !m.completed && !m.locked);
+
+  if (pendingMissions.length === 0) {
+    const completedCount = eligibleMissions.filter((m) => m.completed).length;
+    logSuccess(`Tidak ada misi training yang perlu dijalankan.`);
+    if (completedCount > 0) {
+      logSuccess(`Semua ${completedCount} penawaran training yang tersedia untuk hari ini (${state.day}) sudah diselesaikan!`);
+    } else {
+      logInfo(`Tidak ada penawaran training aktif atau level karakter belum memenuhi syarat misi hari ini.`);
+    }
+    return;
+  }
+
+  logInfo(`Ditemukan ${pendingMissions.length} penawaran training yang siap dijalankan.`);
+
+  let totalCompleted = 0;
+  let totalTpEarned = 0;
+  let totalSsEarned = 0;
+  let totalGoldEarned = 0;
+
+  for (let i = 0; i < pendingMissions.length; i++) {
+    const m = pendingMissions[i];
+    const isTp = m.training_kind === 'talent_point';
+    const typeLabel = isTp ? 'TP Training' : 'SS Training';
+    const rewardName = isTp ? 'TP' : 'Spirit';
+
+    logInfo('------------------------------------------------------------');
+    logInfo(
+      `[Training #${i + 1}/${pendingMissions.length}] Memulai "${m.name}" (${m.id}) | ${typeLabel} (${m.challenge_kind}) -> Hadiah: +${m.reward_amount} ${rewardName}`
+    );
+
+    try {
+      const startRes = await client.startSpecialMission(m.id);
+      if (!startRes) {
+        logWarn(`Server tidak mengembalikan respons untuk misi ${m.id}. Melewati...`);
+        continue;
+      }
+
+      if (startRes.kind === 'battle') {
+        logInfo(`Misi bertipe pertarungan (Battle). Menjalankan pertarungan otomatis via Oracle Engine...`);
+        const battleSession = startRes.session;
+        if (!battleSession || !battleSession.id) {
+          throw new Error('Server tidak memberikan battle session yang valid.');
+        }
+
+        const outcome = await executeBattleSession(client, battleSession, config);
+        if (outcome.verdict === 'win') {
+          totalCompleted++;
+          if (isTp) totalTpEarned += Number(m.reward_amount || 10);
+          else totalSsEarned += Number(m.reward_amount || 30);
+          totalGoldEarned += Number(m.gold || 0);
+
+          logSuccess(
+            `[Training #${i + 1}] BERHASIL MENANG! Hadiah: +${m.reward_amount} ${rewardName}, +${Number(m.gold || 0).toLocaleString('id-ID')} Gold`
+          );
+        } else {
+          logWarn(`[Training #${i + 1}] Pertarungan selesai dengan hasil "${outcome.verdict}".`);
+        }
+      } else {
+        // Tipe challenge minigame (mastermind, memory_pairs, skill_memory, balance, lights_out)
+        const challengeKind = startRes.challenge_kind || m.challenge_kind;
+        const sessionId = startRes.session_id || (startRes.session && startRes.session.id);
+        if (!sessionId) {
+          throw new Error('Server tidak mengembalikan session_id tantangan minigame.');
+        }
+
+        // Pacing delay 5.5s - 8.0s agar realistis dan lolos proteksi anti-cheat server ("challenge completed impossibly fast")
+        const pacingDelayMs = 5500 + Math.floor(Math.random() * 2500);
+        logInfo(
+          `Menyelesaikan tantangan "${challengeKind}" (pacing jeda ${(pacingDelayMs / 1000).toFixed(1)} detik)...`
+        );
+        await sleep(pacingDelayMs);
+
+        const proof = buildChallengeProof(challengeKind, startRes.challenge || m.challenge_config);
+        const compRes = await client.completeSpecialMission(sessionId, proof);
+
+        if (compRes && (compRes.settled || compRes.verdict === 'win' || compRes.grant)) {
+          totalCompleted++;
+          const grant = compRes.grant || {};
+          const rewardAmount = grant.special_reward_amount || m.reward_amount || (isTp ? 10 : 30);
+          const goldAmount = Number(m.gold || 0);
+
+          if (isTp) totalTpEarned += rewardAmount;
+          else totalSsEarned += rewardAmount;
+          totalGoldEarned += goldAmount;
+
+          logSuccess(
+            `[Training #${i + 1}] TANTANGAN SELESAI! Hadiah: +${rewardAmount} ${rewardName}, +${goldAmount.toLocaleString('id-ID')} Gold`
+          );
+        } else {
+          logWarn(`[Training #${i + 1}] Gagal menyelesaikan tantangan: ${JSON.stringify(compRes)}`);
+        }
+      }
+    } catch (err) {
+      logError(`[Training #${i + 1}] Kesalahan: ${err.message || String(err)}`);
+    }
+
+    if (i < pendingMissions.length - 1) {
+      const pauseSec = 3 + Math.floor(Math.random() * 3);
+      logInfo(`Istirahat ${pauseSec} detik sebelum training berikutnya...`);
+      await sleep(pauseSec * 1000);
+    }
+  }
+
+  // Tampilkan ringkasan akhir
+  const finalState = await client.fetchSpecialMissionState().catch(() => null);
+  logSuccess('\n============================================================');
+  logSuccess('RINGKASAN SESI SPECIAL TRAINING');
+  logSuccess('============================================================');
+  logInfo(`Misi Selesai      : ${totalCompleted} dari ${pendingMissions.length}`);
+  if (totalTpEarned > 0) logSuccess(`Total TP Diperoleh: +${totalTpEarned} TP`);
+  if (totalSsEarned > 0) logSuccess(`Total Spirit Diperoleh: +${totalSsEarned} Senjutsu Spirit`);
+  if (totalGoldEarned > 0) logInfo(`Total Gold        : +${totalGoldEarned.toLocaleString('id-ID')} Gold`);
+  if (finalState) {
+    logInfo(
+      `Saldo Akhir       : ${finalState.talent_points ?? 0} TP | ${finalState.senjutsu_spirit ?? 0} Senjutsu Spirit`
+    );
+  }
+  logSuccess('============================================================\n');
+}
+
 
 
 
@@ -2336,6 +2672,13 @@ function parseArgs(argv) {
     exam: false,
     autoExam: false,
     examStatus: false,
+    training: false,
+    tpTraining: false,
+    ssTraining: false,
+    trainingStatus: false,
+    tpStatus: false,
+    ssStatus: false,
+    trainingMode: null,
     track: null,
     examLevel: null,
     targetFloor: null,
@@ -2392,6 +2735,26 @@ function parseArgs(argv) {
       opts.mode = 'exam';
     } else if (arg === '--exam-status') {
       opts.examStatus = true;
+    } else if (arg === '--tp' || arg === '--tp-training') {
+      opts.tpTraining = true;
+      opts.mode = 'tp';
+      opts.trainingMode = 'tp';
+    } else if (arg === '--ss' || arg === '--ss-training') {
+      opts.ssTraining = true;
+      opts.mode = 'ss';
+      opts.trainingMode = 'ss';
+    } else if (arg === '--training' || arg === '--train' || arg === '--special-training') {
+      opts.training = true;
+      opts.mode = 'training';
+      opts.trainingMode = 'all';
+    } else if (arg === '--tp-status') {
+      opts.tpStatus = true;
+      opts.trainingStatus = true;
+    } else if (arg === '--ss-status') {
+      opts.ssStatus = true;
+      opts.trainingStatus = true;
+    } else if (arg === '--training-status' || arg === '--train-status' || arg === '--special-status') {
+      opts.trainingStatus = true;
     } else if (arg === '--track' && argv[i + 1]) {
       opts.track = argv[++i];
     } else if ((arg === '--exam-level' || arg === '--exam-rank') && argv[i + 1]) {
@@ -2483,6 +2846,14 @@ Ujian Kenaikan Tingkat (Auto Exam Lv 20, 40, 60, 80):
   --exam, --auto-exam      Jalankan ujian promosi ninja secara otomatis sesuai level
   --track <normal|tensai>  Pilih jalur ujian: 'normal' atau 'tensai' / 'talented' (default: normal)
   --exam-level <20|40|60|80> Paksa menjalankan ujian untuk tingkatan level tertentu
+
+Special Training (Auto TP Training & SS Training):
+  --training-status        Tampilkan saldo TP, Spirit, & daftar penawaran misi harian
+  --tp-status              Tampilkan status TP Training
+  --ss-status              Tampilkan status SS Training
+  --tp, --tp-training      Jalankan otomatis TP Training harian (Talent Points, Jounin Lv 40+)
+  --ss, --ss-training      Jalankan otomatis SS Training harian (Senjutsu Spirit, Tutor Lv 80+)
+  --training, --train      Jalankan seluruh special training yang tersedia (TP & SS)
 `);
     return;
   }
@@ -2540,8 +2911,16 @@ Ujian Kenaikan Tingkat (Auto Exam Lv 20, 40, 60, 80):
     return;
   }
 
+  if (cliOptions.trainingStatus) {
+    await showSpecialMissionStatus(client);
+    return;
+  }
+
   const selectedMode =
     cliOptions.mode ||
+    (cliOptions.tpTraining ? 'tp' : null) ||
+    (cliOptions.ssTraining ? 'ss' : null) ||
+    (cliOptions.training ? 'training' : null) ||
     (cliOptions.exam ? 'exam' : null) ||
     (cliOptions.worldBoss ? 'wb' : null) ||
     (cliOptions.eventBoss ? 'event' : null) ||
@@ -2551,7 +2930,13 @@ Ujian Kenaikan Tingkat (Auto Exam Lv 20, 40, 60, 80):
     config.mode ||
     'mission';
 
-  if (selectedMode === 'exam') {
+  if (selectedMode === 'tp' || selectedMode === 'tp_training') {
+    await runTrainingBot(client, config, cliOptions, 'tp');
+  } else if (selectedMode === 'ss' || selectedMode === 'ss_training') {
+    await runTrainingBot(client, config, cliOptions, 'ss');
+  } else if (selectedMode === 'training' || selectedMode === 'train' || selectedMode === 'special') {
+    await runTrainingBot(client, config, cliOptions, 'all');
+  } else if (selectedMode === 'exam') {
     await runExamBot(client, config, cliOptions);
   } else if (selectedMode === 'wb' || selectedMode === 'world_boss') {
     await runWorldBossBot(client, config, cliOptions);
@@ -2584,5 +2969,8 @@ module.exports = {
   showExamStatus,
   runExamBot,
   EXAM_RANKS,
+  buildChallengeProof,
+  showSpecialMissionStatus,
+  runTrainingBot,
 };
 

@@ -1,7 +1,7 @@
 {
   "name": "ninja-horizon-afk-bot",
-  "version": "1.4.0",
-  "description": "Headless AFK EXP, World Boss, Hunting House, Eudemon Garden, Shinobi Tower & Auto Exam Bot untuk Ninja Horizon menggunakan bytecode asli mesin Oracle (Hermes v98)",
+  "version": "1.5.0",
+  "description": "Headless AFK EXP, World Boss, Hunting House, Eudemon Garden, Shinobi Tower, Auto Exam, TP Training & SS Training Bot untuk Ninja Horizon menggunakan bytecode asli mesin Oracle (Hermes v98)",
   "main": "bot.js",
   "scripts": {
     "extract": "python extract_oracle.py",
@@ -21,7 +21,13 @@
     "tower:status": "node bot.js --tower-status",
     "tower:sweep": "node bot.js --tower-sweep",
     "exam": "node bot.js --exam",
-    "exam:status": "node bot.js --exam-status"
+    "exam:status": "node bot.js --exam-status",
+    "tp": "node bot.js --tp",
+    "tp:status": "node bot.js --tp-status",
+    "ss": "node bot.js --ss",
+    "ss:status": "node bot.js --ss-status",
+    "training": "node bot.js --training",
+    "training:status": "node bot.js --training-status"
   },
   "engines": {
     "node": ">=18.0.0"

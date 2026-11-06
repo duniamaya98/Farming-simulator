@@ -407,3 +407,60 @@ node bot.js --exam --track tensai
 # 4. Paksa menjalankan ujian untuk level tertentu (contoh: Level 20 Chunin Exam)
 node bot.js --exam-level 20
 ```
+
+---
+
+## 10. Panduan Special Training (Auto TP Training & SS Training)
+
+**Special Training** adalah fitur harian yang memberikan sumber daya esensial untuk meningkatkan kekuatan karakter di luar EXP dan Gold biasa:
+1. **TP Training (Talent Points)**: Dibuka pada pangkat **Jounin (Level 40+)** di Talent Hall / Special Missions. Memberikan Talent Points (TP) untuk menaikkan talent pohon pasif ninja. Maksimal harian: **30 TP/hari** (3 misi x 10 TP).
+2. **SS Training (Senjutsu Spirit / Sage Training)**: Dibuka pada pangkat **Ninja Tutor (Level 80+)** di Senjutsu Mountain / Special Missions. Memberikan Senjutsu Spirit untuk meng-upgrade jutsu sage dan aliran senjutsu. Maksimal harian: **150 Spirit/hari** (5 misi x 30 Spirit).
+
+### 10.1 Katalog Special Mission Harian
+
+| ID | Nama Misi | Kategori | Syarat | Jenis Tantangan | Hadiah Utama | Hadiah Gold |
+|---|---|---|---|---|---|---|
+| `msn170` | Secret TP Scroll | TP Training | Jounin Lv 40 | `memory_pairs` (Minigame Kartu) | +10 TP | 2.000 Gold |
+| `msn171` | The Kekkai in the Forest | TP Training | Jounin Lv 40 | `mastermind` (Tebak Segel) | +10 TP | 2.000 Gold |
+| `msn172` | Weird Potion | TP Training | Jounin Lv 40 | `skill_memory` (Hafalan Segel) | +10 TP | 2.000 Gold |
+| `msn173` | Another TP Scroll | TP Training | Jounin Lv 40 | `memory_pairs` (Minigame Kartu) | +10 TP | 2.000 Gold |
+| `msn174` | Dangerous Potion | TP Training | Jounin Lv 40 | `skill_memory` (Hafalan Segel) | +10 TP | 2.000 Gold |
+| `msn279` | Sage Power Seal | SS Training | Tutor Lv 80 | `mastermind` (Tebak Segel) | +30 Spirit | 10.000 Gold |
+| `msn280` | Balance Control | SS Training | Tutor Lv 80 | `balance` (Keseimbangan Chakra) | +30 Spirit | 10.000 Gold |
+| `msn281` | Sage Sealed Boxes | SS Training | Tutor Lv 80 | `lights_out` (Saklar Petak) | +30 Spirit | 10.000 Gold |
+| `msn282` | Forest Guardians | SS Training | Tutor Lv 80 | `battle` (Pertarungan 3 Musuh) | +30 Spirit | 10.000 Gold |
+
+### 10.2 Protokol RPC & Solusi Minigame Headless
+
+Berdasarkan reverse engineering bundle Hermes (modul `special_mission`, FID `12325–12332`, `22821–22824`, `26513`, `27767–27769`):
+1. **`special_mission_state`**: Mengambil daftar penawaran hari ini (`missions`), saldo `talent_points`, saldo `senjutsu_spirit`, serta batas maksimal harian (`tp_daily_max`, `spirit_daily_max`).
+2. **`special_mission_start` (`{ p_mission: missionId }`)**:
+   - Jika `kind === "battle"`: Mengembalikan battle session standar yang diselesaikan otomatis menggunakan **Oracle Engine** bot (`executeBattleSession`).
+   - Jika `kind === "challenge"`: Mengembalikan sesi minigame beserta parameter konfigurasi tantangan (`session_id`, `challenge_kind`, `challenge`).
+3. **`special_mission_complete` (`{ p_session, p_proof }`)**:
+   - Bot menyimulasikan pacing manusiawi (5.5 – 8.0 detik) untuk menghindari deteksi anti-cheat server (*challenge completed impossibly fast*).
+   - Bot menyusun `p_proof` yang valid: `{ success: true, completed: <target_count> }`.
+
+### 10.3 Contoh Perintah Penggunaan Special Training
+
+```powershell
+# 1. Cek status saldo TP & Spirit serta daftar misi harian yang ditawarkan server
+node bot.js --training-status
+# atau via npm shortcut:
+npm run training:status
+
+# 2. Jalankan otomatis seluruh TP Training harian (Talent Points, 3 misi = +30 TP)
+node bot.js --tp
+# atau via npm shortcut:
+npm run tp
+
+# 3. Jalankan otomatis seluruh SS Training harian (Senjutsu Spirit, 4-5 misi = +120 s/d +150 Spirit)
+node bot.js --ss
+# atau via npm shortcut:
+npm run ss
+
+# 4. Jalankan seluruh Special Training yang tersedia hari ini sekaligus (TP + SS)
+node bot.js --training
+# atau via npm shortcut:
+npm run training
+```
