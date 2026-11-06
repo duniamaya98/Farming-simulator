@@ -382,7 +382,7 @@ class NinjaHorizonClient {
 
   /** Mengambil avatar pemain (tabel `player_avatar`, meniru fetchAvatar func[23312]). */
   async fetchAvatar() {
-    const rows = await this.rest('player_avatar?select=name,level,xp,rank,auto_plan');
+    const rows = await this.rest('player_avatar?select=name,level,xp,rank,talented,auto_plan');
     return Array.isArray(rows) ? rows[0] || null : null;
   }
 
@@ -398,6 +398,37 @@ class NinjaHorizonClient {
    */
   async abandonMission(sessionId) {
     return await this.rpc('mission_abandon', { p_session: sessionId });
+  }
+
+  // ==========================================================================
+  // Ninja Exam & Recruitment RPCs
+  // ==========================================================================
+  async fetchExamState(rank = 'special_jounin') {
+    return await this.rpc('exam_player_state', { p_rank: rank });
+  }
+
+  async fetchRecruitDefs() {
+    return await this.rest('recruit_npc_defs?select=*');
+  }
+
+  async recruitNpc(npcId) {
+    return await this.rpc('recruit_npc', { p_npc: npcId });
+  }
+
+  async unrecruitNpc(npcId) {
+    return await this.rpc('unrecruit_npc', { p_npc: npcId });
+  }
+
+  async fetchFriendSurface() {
+    return await this.rpc('friend_player_surface_state');
+  }
+
+  async recruitFriend(friendUserId) {
+    return await this.rpc('recruit_friend', { p_friend: friendUserId });
+  }
+
+  async unrecruitFriend(friendUserId) {
+    return await this.rpc('unrecruit_friend', { p_friend: friendUserId });
   }
 
   // ==========================================================================
@@ -714,6 +745,12 @@ async function executeBattleSession(client, sessionResp, tacticalPlan, options =
     `Status: ${clientDiag.status.toUpperCase()} | Round: ${clientDiag.round} | ` +
     `Turns: ${clientDiag.turns} | Actions: ${actions.length} | Checksum: ${clientDiag.checksum}`
   );
+
+  if (options.abandonOnLoss && clientDiag.status !== 'win') {
+    logWarn(`[${label}] Hasil simulasi offline: ${clientDiag.status.toUpperCase()}. Membatalkan sesi misi untuk keamanan...`);
+    await client.abandonMission(sessionId).catch(() => {});
+    return { sessionId, build, receipt: null, verdict: clientDiag.status, grant: {}, clientDiag, actions };
+  }
 
   const perTurnMs = randomInt(700, 950);
   const turnDelayMs = clientDiag.turns * perTurnMs;
@@ -1805,6 +1842,242 @@ async function runTowerBot(client, config, cliOptions) {
   logSuccess(`Selesai sesi Shinobi Tower! Total lantai didaki: ${climbedCount}, Menang: ${totalWins}. Posisi sekarang: Lantai ${currentFloor - 1}`);
 }
 
+// ============================================================================
+// Ujian Ninja (Ninja Exam / Promotion Solver)
+// ============================================================================
+async function showExamStatus(client) {
+  logInfo('Mengambil status Ujian Ninja dan progress kelulusan dari server...');
+  const avatar = await client.fetchAvatar();
+  if (!avatar) {
+    logWarn('Belum ada karakter yang aktif!');
+    return;
+  }
+
+  const currentRank = avatar.rank || 'special_jounin';
+  const examData = await client.fetchExamState(currentRank);
+  const rankInfo = examData?.rank || {};
+  const clears = new Set(examData?.clears || []);
+  const defs = examData?.definitions || [];
+
+  const isTalented = Boolean(avatar.talented);
+  const examMissions = isTalented
+    ? rankInfo.exam_missions_talented || []
+    : rankInfo.exam_missions || [];
+  const rewards = isTalented
+    ? rankInfo.exam_rewards_talented || {}
+    : rankInfo.exam_rewards_normal || {};
+
+  console.log('\n=== STATUS UJIAN NINJA ===');
+  logInfo(`Karakter         : ${avatar.name} (Lv ${avatar.level}, ${currentRank}, Talented: ${isTalented ? 'Ya (Tensai)' : 'Biasa'})`);
+  logInfo(`Jalur Ujian      : ${isTalented ? 'Tensai Ninja Tutor Exam' : 'Normal Ninja Tutor Exam'}`);
+  logInfo(`Badge Target     : ${rewards.badge_label || rankInfo.badge_label || 'Ninja Tutor Badge'}`);
+  if (rewards.unlocks) {
+    logInfo(`Fitur Terbuka    : ${rewards.unlocks.map((u) => u.label || u.id).join(', ')}`);
+  }
+  if (rewards.gear) {
+    logInfo(`Hadiah Gear      : ${rewards.gear.join(', ')}`);
+  }
+
+  console.log('\n=== DAFTAR STAGE UJIAN ===');
+  let clearedCount = 0;
+  examMissions.forEach((mid, idx) => {
+    const isCleared = clears.has(mid);
+    if (isCleared) clearedCount++;
+    const def = defs.find((d) => d.id === mid) || {};
+    const statusStr = isCleared ? '[LULUS]' : '[BELUM]';
+    const wavesStr = def.waves?.length ? `${def.waves.length} wave` : '1 wave';
+    console.log(`  Stage ${idx + 1}: ${statusStr} ${mid} - "${def.name || 'Misi Ujian'}" (${wavesStr})`);
+  });
+
+  console.log('\n=== REKAP PROGRESS ===');
+  logInfo(`Progress Kelulusan: ${clearedCount} / ${examMissions.length} stage selesai.`);
+  if (clearedCount === examMissions.length) {
+    logSuccess('Semua stage ujian sudah lulus! Karakter berhak dipromosikan.');
+  } else {
+    logInfo('Gunakan perintah berikut untuk melewati stage yang tersisa secara otomatis:');
+    logInfo('  node bot.js --exam tutor');
+  }
+}
+
+async function ensureExamAllies(client, avatar) {
+  try {
+    const [avatarRows, friendSurface] = await Promise.all([
+      client.rest('player_avatar?select=npcs,recruited_friends'),
+      client.fetchFriendSurface().catch(() => ({})),
+    ]);
+    const currentAvatar = Array.isArray(avatarRows) ? avatarRows[0] : {};
+    const npcs = currentAvatar.npcs || [];
+    const friends = currentAvatar.recruited_friends || [];
+    let totalRecruits = npcs.length + friends.length;
+
+    if (totalRecruits >= 2) {
+      logInfo(`Tim Ujian lengkap (2/2): NPC=[${npcs.join(', ')}] Friends=[${friends.join(', ')}]`);
+      return;
+    }
+
+    logInfo(`Mempersiapkan sekutu tim ujian (${totalRecruits}/2 aktif)...`);
+
+    // 1. Coba rekrut teman (gratis token) yang levelnya <= avatar.level dan belum direkrut hari ini
+    const availFriends = (friendSurface.friends || [])
+      .filter((f) => f.level <= avatar.level && !f.recruited_today && !friends.includes(f.user_id))
+      .sort((a, b) => b.level - a.level);
+
+    for (const f of availFriends) {
+      if (totalRecruits >= 2) break;
+      try {
+        await client.recruitFriend(f.user_id);
+        logSuccess(`Berhasil merekrut teman: ${f.name} (Lv ${f.level}, ${f.rank})!`);
+        friends.push(f.user_id);
+        totalRecruits++;
+      } catch (e) {
+        logWarn(`Catatan rekrut teman ${f.name}: ${e.message}`);
+      }
+    }
+
+    // 2. Jika masih ada slot kosong (< 2), rekrut NPC berbayar token
+    if (totalRecruits < 2) {
+      const npcCandidates = ['npc_8', 'npc_7', 'npc_6', 'npc_5', 'npc_4', 'npc_3'];
+      for (const nid of npcCandidates) {
+        if (totalRecruits >= 2) break;
+        if (npcs.includes(nid)) continue;
+        try {
+          await client.recruitNpc(nid);
+          logSuccess(`Berhasil merekrut NPC: ${nid}!`);
+          npcs.push(nid);
+          totalRecruits++;
+        } catch (e) {
+          // Token tidak mencukupi untuk NPC ini, lanjutkan coba kandidat lebih murah
+          continue;
+        }
+      }
+    }
+  } catch (err) {
+    logWarn(`Kendala menyiapkan sekutu ujian: ${err.message}`);
+  }
+}
+
+async function runExamBot(client, config, cliOptions) {
+  logInfo('============================================================');
+  logInfo(' NINJA HORIZON — AUTO SOLVER UJIAN NINJA (EXAM BOT)');
+  logInfo('============================================================');
+
+  const avatar = await client.fetchAvatar();
+  if (!avatar) {
+    logError('Belum ada karakter yang aktif pada akun ini.');
+    return;
+  }
+
+  const currentRank = avatar.rank || 'special_jounin';
+  logInfo(`Karakter            : ${avatar.name} (Lv ${avatar.level}, ${currentRank})`);
+
+  let targetRank = cliOptions.examRank;
+  if (!targetRank) {
+    if (currentRank === 'special_jounin') targetRank = 'tutor';
+    else if (currentRank === 'jounin') targetRank = 'special_jounin';
+    else if (currentRank === 'chunin') targetRank = 'jounin';
+    else if (currentRank === 'genin') targetRank = 'chunin';
+    else targetRank = currentRank;
+  }
+  logInfo(`Target Promosi Rank : ${targetRank.toUpperCase()}`);
+
+  const examData = await client.fetchExamState(currentRank);
+  const rankInfo = examData?.rank || {};
+  const clears = new Set(examData?.clears || []);
+  const defs = examData?.definitions || [];
+
+  const isTalented = Boolean(avatar.talented);
+  const examMissions = isTalented
+    ? rankInfo.exam_missions_talented || []
+    : rankInfo.exam_missions || [];
+
+  if (!examMissions.length) {
+    logWarn(`Tidak menemukan track misi ujian untuk rank ${currentRank}.`);
+    return;
+  }
+
+  const pendingStages = examMissions.filter((mid) => !clears.has(mid));
+  logInfo(`Stage Tersisa       : ${pendingStages.length} dari ${examMissions.length} stage`);
+
+  if (pendingStages.length === 0) {
+    logSuccess('Semua stage ujian sudah lulus! Karakter sudah mencapai rank maksimal untuk ujian ini.');
+    return;
+  }
+
+  const tacticalPlan = config.tacticalPlan || 'suggestPlayerAction';
+  const minDelaySec = config.minDelaySec || 8;
+  const maxDelaySec = config.maxDelaySec || 15;
+
+  let clearedThisSession = 0;
+
+  for (let i = 0; i < examMissions.length; i++) {
+    const stageId = examMissions[i];
+    const stageNum = i + 1;
+    const def = defs.find((d) => d.id === stageId) || {};
+    const stageName = def.name || stageId;
+
+    if (clears.has(stageId)) {
+      logInfo(`[Stage ${stageNum}/${examMissions.length}] "${stageName}" (${stageId}) -> SUDAH LULUS.`);
+      continue;
+    }
+
+    logInfo('------------------------------------------------------------');
+    logInfo(`[Stage ${stageNum}/${examMissions.length}] MEMULAI UJIAN: "${stageName}" (${stageId})...`);
+
+    // Pastikan 2 slot sekutu terisi sebelum memasuki pertempuran stage
+    await ensureExamAllies(client, avatar);
+
+    try {
+      const sessionResp = await client.startMission(stageId);
+      const sessionId = sessionResp?.id;
+      if (!sessionId) {
+        throw new Error(`Gagal memulai misi ujian: ${JSON.stringify(sessionResp)}`);
+      }
+
+      // Jalankan eksekusi pertarungan via Hermes engine dengan auto-abandon jika kalah
+      const runLabel = `Exam Stage ${stageNum}`;
+      const { verdict, grant } = await executeBattleSession(
+        client,
+        sessionResp,
+        tacticalPlan,
+        { minDelaySec, maxDelaySec, label: runLabel, abandonOnLoss: true }
+      );
+
+      if (verdict === 'win') {
+        clearedThisSession++;
+        clears.add(stageId);
+        logSuccess(`[Stage ${stageNum}] LULUS BERHASIL! Stage "${stageName}" selesai.`);
+
+        if (grant?.promoted_to) {
+          logSuccess('============================================================');
+          logSuccess(`🎉 PROMOSI BERHASIL! Karakter dipromosikan ke: ${grant.promoted_to.toUpperCase()}`);
+          logSuccess('Level cap karakter kini bertambah menjadi Level 100!');
+          logSuccess('Fitur Senjutsu System & SS Training telah terbuka.');
+          if (grant.rewards && grant.rewards.length > 0) {
+            logSuccess(`Hadiah Item & Gear: ${grant.rewards.map((r) => r.name || r.id).join(', ')}`);
+          }
+          logSuccess('============================================================');
+        }
+
+        // Jeda santai antar stage
+        const restSec = randomInt(8, 12);
+        logInfo(`Istirahat ${restSec} detik sebelum ujian berikutnya...`);
+        await sleep(restSec * 1000);
+      } else {
+        logWarn(`[Stage ${stageNum}] Pertarungan belum menang (verdict: ${verdict}).`);
+        logWarn('Bot menghentikan sesi ujian agar karakter dapat dievaluasi.');
+        break;
+      }
+    } catch (err) {
+      logError(`[Stage ${stageNum}] Gagal menyelesaikan stage: ${err.message}`);
+      if (err.payload) logError(`Server payload: ${JSON.stringify(err.payload)}`);
+      break;
+    }
+  }
+
+  logInfo('------------------------------------------------------------');
+  logSuccess(`Sesi Auto Exam selesai! Berhasil menyelesaikan ${clearedThisSession} stage pada sesi ini.`);
+}
+
 
 
 // ============================================================================
@@ -1835,6 +2108,9 @@ function parseArgs(argv) {
     maxRuns: null,
     autoClaim: false,
     autoRefill: false,
+    exam: false,
+    examRank: null,
+    examStatus: false,
     mode: null,
   };
 
@@ -1846,6 +2122,14 @@ function parseArgs(argv) {
       opts.testSim = true;
     } else if (arg === '--status') {
       opts.status = true;
+    } else if (arg === '--exam-status') {
+      opts.examStatus = true;
+    } else if (arg === '--exam') {
+      opts.exam = true;
+      opts.mode = 'exam';
+      if (argv[i + 1] && !argv[i + 1].startsWith('--')) {
+        opts.examRank = argv[++i];
+      }
     } else if (arg === '--list-missions') {
       opts.listMissions = true;
     } else if (arg === '--list-bosses' || arg === '--bosses') {
@@ -1956,6 +2240,10 @@ Farming Shinobi Tower (Tower of Trials):
   --target-floor <lantai>  Tentukan lantai target akhir untuk berhenti (contoh: --target-floor 80)
   --max-floors <jumlah>    Batas maksimal jumlah lantai yang dinaiki dalam satu kali sesi
   --auto-sweep             Lakukan sweep otomatis sebelum memulai pendakian lantai
+
+Ujian Ninja (Ninja Exam / Promotion Solver):
+  --exam-status            Tampilkan track ujian, progress kelulusan stage, & hadiah
+  --exam [rank]            Jalankan auto-clear ujian promosi rank ninja (contoh: --exam tutor)
 `);
     return;
   }
@@ -1975,6 +2263,11 @@ Farming Shinobi Tower (Tower of Trials):
 
   if (cliOptions.status) {
     await showStatus(client);
+    return;
+  }
+
+  if (cliOptions.examStatus) {
+    await showExamStatus(client);
     return;
   }
 
@@ -2015,6 +2308,7 @@ Farming Shinobi Tower (Tower of Trials):
     (cliOptions.hunting ? 'hunting' : null) ||
     (cliOptions.eudemon ? 'eudemon' : null) ||
     (cliOptions.tower ? 'tower' : null) ||
+    (cliOptions.exam ? 'exam' : null) ||
     config.mode ||
     'mission';
 
@@ -2028,6 +2322,8 @@ Farming Shinobi Tower (Tower of Trials):
     await runHuntBot(client, config, cliOptions, 'eudemon');
   } else if (selectedMode === 'tower') {
     await runTowerBot(client, config, cliOptions);
+  } else if (selectedMode === 'exam') {
+    await runExamBot(client, config, cliOptions);
   } else {
     await runAfkBot(client, config, cliOptions);
   }
@@ -2046,5 +2342,7 @@ module.exports = {
   showTowerStatus,
   sweepTowerAction,
   runTowerBot,
+  showExamStatus,
+  runExamBot,
 };
 

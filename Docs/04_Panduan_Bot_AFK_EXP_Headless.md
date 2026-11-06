@@ -358,3 +358,46 @@ node bot.js --tower-sweep
 # 6. Jalankan sweep terlebih dahulu kemudian lanjutkan auto-climb
 node bot.js --tower --auto-sweep
 ```
+
+---
+
+## 9. Mode Ujian Ninja (Ninja Exam & Promotion Solver)
+
+Fitur **Ujian Ninja (Ninja Exam)** memungkinkan karakter menembus batas level cap dan naik ke jenjang rank berikutnya (misalnya: *Genin* $\to$ *Chunin* $\to$ *Jounin* $\to$ *Special Jounin* $\to$ *Senior Ninja Tutor*).
+
+### 9.1 Mekanisme Ujian Ninja Tutor (Level 80 Cap Break)
+Bagi karakter yang telah mencapai Level 80 pada rank `special_jounin`, kelulusan **Senior Ninja Tutor Exam** membuka:
+1. **Level Cap Break**: Meningkatkan batas level maksimal dari **Lv 80** menjadi **Lv 100**.
+2. **Senjutsu System**: Membuka jalur energi alam (Senjutsu school, spirit, dan jutsu alam).
+3. **SS Training**: Membuka pelatihan misi SS untuk penguatan atribut.
+4. **Hadiah Gear & Skill Eksklusif**:
+   - `back430` (Aksesoris punggung Tutor)
+   - `wpn988` (Senjata Tutor Tensai)
+   - `set1788` (Kostum Pria Tutor) / `set1789` (Kostum Wanita Tutor)
+   - `skill3500` (Senjutsu Jutsu)
+   - `SENIOR NINJA TUTOR BADGE`
+
+### 9.2 Jalur Ujian (Normal vs Tensai)
+Dari hasil reverse engineering RPC `exam_player_state`:
+- **Normal Track** (`exam_missions`): `["msn252", "msn253", "msn254", "msn255", "msn256", "msn257", "msn258"]`
+- **Tensai Track** (`exam_missions_talented`): `["msn259", "msn260", "msn261", "msn262", "msn263", "msn264", "msn265"]`
+  - Stage 1: `msn259` — *Emergency! Fire Village is Falling...* (5 waves)
+  - Stage 2: `msn260` — *Battle off! Homunculus Ninjas!* (2 waves)
+  - Stage 3: `msn261` — *Fight on! Preta Realm!* (1 wave, Preta Realm 193k HP + 2 White Puppet)
+  - Stage 4: `msn262` — *Soul Snatcher* (1 wave)
+  - Stage 5: `msn263` — *The Hall of Pain* (1 wave)
+  - Stage 6: `msn264` — *Finale! The Tower of Demons* (5 waves)
+  - Stage 7: `msn265` — *The Truth* (2 waves, Grand Finale Boss)
+
+### 9.3 Otomasi Perekrutan NPC Pembantu (`recruit_npc`)
+Pada ujian level tinggi, bos musuh memiliki ratusan ribu HP. Bot secara otomatis memeriksa dan merekrut NPC pembantu tangguh dari katalog `recruit_npc_defs` (seperti *Keisuke* `npc_8` ber-HP 33.600 dan *Masaki* `npc_7` ber-HP 24.600) untuk membentuk tim tangguh beranggotakan 3 ninja + pet.
+
+### 9.4 Perintah Penggunaan Ujian Ninja
+```powershell
+# 1. Cek status track ujian, daftar stage, dan progress kelulusan saat ini
+node bot.js --exam-status
+
+# 2. Jalankan bot untuk menyelesaikan seluruh stage ujian yang tersisa secara otomatis
+node bot.js --exam tutor
+```
+
